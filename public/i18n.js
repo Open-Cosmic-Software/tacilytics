@@ -135,6 +135,7 @@
     'Time zone (days start at midnight here)': 'Zeitzone (hier beginnt der Tag um Mitternacht)',
     'Time zone of this site — days start at midnight here': 'Zeitzone dieser Website, hier beginnt der Tag um Mitternacht',
     'Days, hours, the weekly report and alerts follow this time zone for': 'Tage, Stunden, Wochenbericht und Alarme richten sich nach dieser Zeitzone für',
+    'Ignore visits from cloud and hosting networks (scrapers). The IP is checked on arrival and never stored. Visitors behind some VPNs are not counted either.': 'Besuche aus Cloud- und Hosting-Netzen ignorieren (Scraper). Die IP wird beim Eintreffen geprüft und nie gespeichert. Besucher hinter manchen VPNs werden dann ebenfalls nicht gezählt.',
     'Stored data does not change — switching back and forth is safe.': 'Gespeicherte Daten ändern sich nicht, Hin- und Herwechseln ist gefahrlos.',
     'Unique visitors per day are an approximation outside UTC: the anonymous visitor ID changes at midnight UTC.': 'Eindeutige Besucher pro Tag sind außerhalb von UTC eine Näherung: Die anonyme Besucher-ID wechselt um Mitternacht UTC.',
     'Unknown time zone': 'Unbekannte Zeitzone',

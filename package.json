@@ -49,6 +49,7 @@
     "server.js",
     "cli.js",
     "day-salt.js",
+    "datacenter.js",
     "auth.js",
     "importers.js",
     "report.js",

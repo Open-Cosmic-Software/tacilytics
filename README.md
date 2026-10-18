@@ -335,6 +335,18 @@ devices. You get the 95 % that matters (how many, which pages, from where) witho
 the same approach as Plausible/Fathom. Whether you still need consent depends on your
 jurisdiction and setup; strict mode (`data-strict`) reduces the device reads further.
 
+**Sources per visit.** Like GA, Plausible and Matomo, the source belongs to the visit: an internal
+click or a reload inherits the source of the same visitor's previous page view within 30 minutes,
+instead of showing up as *Direct*. This happens on the server (daily visitor hash), so strict mode
+works the same and nothing extra is read on the device.
+
+**Bots and scrapers.** Known crawler, AI-scraper and HTTP-library user agents are dropped. Scrapers
+that pretend to be a normal browser usually run in a cloud: by default, visits from cloud and hosting
+networks are ignored too (list: [X4BNet/lists_vpn](https://github.com/X4BNet/lists_vpn) *datacenter*,
+MIT, downloaded once a day — no visitor data leaves your server). The IP is checked on arrival and
+never stored. Honest trade-off: visitors behind some VPNs are not counted either. Switch it off per
+site in the time-zone dialog, or for the whole server with `TACILYTICS_DATACENTER=off`.
+
 ## Light mode & German
 
 Settings → Security → **Appearance**: *Theme* (System / Light / Dark) and *Language* (Automatic / English / Deutsch), saved per browser. *System* follows the device's light/dark setting live; *Automatic* picks German when the browser is German. Your data (paths, sources, event names) is never translated.
@@ -386,6 +398,8 @@ The server-wide `API_KEY` from `.env` keeps owner rights for agents and the CLI 
 | `SMTP_URL` / `REPORT_FROM` | — | Mail server + sender for the weekly report |
 | `REPORT_HOUR_UTC` | `6` | Monday hour (UTC) the weekly report goes out; it covers the last 7 full days in each site's time zone |
 | `AUDIT_RETENTION_DAYS` | `365` | How long the team activity log is kept (min. 30) |
+| `TACILYTICS_DATACENTER` | on | `off` disables the cloud / hosting network filter server-wide (no list download) |
+| `TACILYTICS_DATACENTER_FILE` | — | Use local range lists instead of the daily download (comma-separated paths, CIDR per line), e.g. for offline installs |
 | `DATA_RETENTION_DAYS` | `0` | `0` = keep forever; `>0` purges raw events older than N days, daily (data minimisation) |
 
 ## Privacy & security
@@ -435,6 +449,7 @@ Issues, ideas and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.
 - Brand marks: [Simple Icons](https://simpleicons.org) (CC0). Brand names and logos are trademarks of their owners; see `public/assets/DISCLAIMER-simple-icons.md`. Windows and Edge have no free official mark, so a neutral icon is shown.
 - Flags: [flag-icons](https://flagicons.lipis.dev) (MIT)
 - Font: [Inter](https://rsms.me/inter/) (SIL OFL 1.1), self-hosted
+- Datacenter ranges: [X4BNet/lists_vpn](https://github.com/X4BNet/lists_vpn) (MIT), downloaded at runtime, not bundled
 
 ## License
 

@@ -1,0 +1,95 @@
+'use strict';
+// Datacenter filter (2.5): visits from cloud / hosting networks are dropped on arrival, the IP is never
+// stored. Per site switch (dc_filter, default on). No list loaded = filter off (count rather than lose).
+const { test } = require('node:test');
+const assert = require('node:assert');
+const { spawn } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const Database = require('better-sqlite3');
+const { createDatacenterCheck, _test: T } = require('../datacenter.js');
+
+const ROOT = path.join(__dirname, '..');
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'taci-dc-'));
+const LIST = path.join(dir, 'ranges.txt');
+// 127.0.0.0/8 stands in for a cloud network, so the local test connection counts as "datacenter"
+fs.writeFileSync(LIST, '# test list\n127.0.0.0/8\n198.51.100.0/24\n2001:db8::/32\n');
+
+test('datacenter list: parsing and lookup', () => {
+  const c = createDatacenterCheck({ files: LIST, log: {} });
+  assert.strictEqual(c.isDatacenter('8.8.8.8'), false, 'no list loaded yet = off');
+  c.start();
+  assert.ok(c.loaded);
+  for (const ip of ['127.0.0.1', '198.51.100.7', '198.51.100.255', '::ffff:198.51.100.1', '2001:db8::1', '2001:db8:ffff::9']) assert.strictEqual(c.isDatacenter(ip), true, ip);
+  for (const ip of ['198.51.101.1', '203.0.113.5', '2001:db9::1', '::1', 'nonsense', '']) assert.strictEqual(c.isDatacenter(ip), false, ip);
+  const l = T.parseList('10.0.0.0/9\n10.128.0.0/9\n10.0.0.0/8\n');
+  assert.deepStrictEqual(l.v4.length, 1, 'adjacent and overlapping ranges merge');
+  assert.strictEqual(createDatacenterCheck({ mode: 'off', files: LIST, log: {} }).isDatacenter('127.0.0.1'), false);
+});
+
+const DB_PATH = path.join(dir, 'a.db');
+const PORT = 48000 + Math.floor(Math.random() * 1000);
+const KEY = 'k-dc-filter-test';
+const ENV = { ...process.env, DB_PATH, PORT: String(PORT), DIGEST_WEBHOOK_URL: 'off',
+  DATA_RETENTION_DAYS: '0', INGEST_SALT: 's', API_KEY: KEY, SESSION_SECRET: 'x', WEB_PASSWORD: 'pass-dc-filter',
+  TRUST_PROXY: '0', TACILYTICS_ALERT_TICK: 'off', TACILYTICS_DATACENTER_FILE: LIST };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const base = `http://127.0.0.1:${PORT}`;
+const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
+const auth = { Authorization: 'Bear' + 'er ' + KEY };
+async function j(method, p, body, headers = {}) {
+  const r = await fetch(base + p, { method, headers: { 'Content-Type': 'application/json', ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
+  let data = null; try { data = await r.json(); } catch {}
+  return { status: r.status, data };
+}
+const count = (p) => { const db = new Database(DB_PATH, { readonly: true }); const n = db.prepare('SELECT COUNT(*) n FROM events WHERE path = ?').get(p).n; db.close(); return n; };
+const collect = (p, ua = UA) => fetch(base + '/api/collect', { method: 'POST', headers: { 'Content-Type': 'text/plain', 'User-Agent': ua }, body: JSON.stringify({ d: 'dc.test', p, st: 1 }) });
+const hit = (p, ip) => j('POST', '/api/v1/hit', { domain: 'dc.test', ua: UA, ip, path: p }, auth);
+
+test('datacenter filter in the server', async (t) => {
+  const proc = spawn(process.execPath, [path.join(ROOT, 'server.js')], { cwd: ROOT, env: ENV, stdio: ['ignore', 'ignore', 'pipe'] });
+  let err = ''; proc.stderr.on('data', (d) => { err += d; });
+  t.after(async () => { if (proc.exitCode === null) { proc.kill('SIGTERM'); await new Promise((r) => proc.on('exit', r)); } fs.rmSync(dir, { recursive: true, force: true }); });
+  let up = false; for (let i = 0; i < 100 && !up; i++) { try { await fetch(base + '/nyx.js'); up = true; } catch { await sleep(100); } }
+  assert.ok(up, 'server started ' + err);
+  const site = (await j('POST', '/api/sites', { domain: 'dc.test' }, auth)).data;
+  assert.strictEqual(site.dc_filter, 1, 'on by default');
+
+  await t.test('collect from a datacenter IP is dropped (also in strict mode)', async () => {
+    await collect('/from-cloud');
+    assert.strictEqual(count('/from-cloud'), 0);
+  });
+  await t.test('server mode: datacenter IP dropped, normal IP counted', async () => {
+    assert.strictEqual((await hit('/h-cloud', '198.51.100.20')).status, 204);
+    await hit('/h-home', '203.0.113.20');
+    assert.strictEqual(count('/h-cloud'), 0);
+    assert.strictEqual(count('/h-home'), 1);
+  });
+  await t.test('switched off per site → counted again; timezone untouched', async () => {
+    const r = await j('PATCH', '/api/sites/' + site.id, { dcFilter: false }, auth);
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.data.dc_filter, 0);
+    assert.strictEqual(r.data.timezone, site.timezone);
+    await collect('/cloud-allowed');
+    await hit('/h-cloud-allowed', '198.51.100.21');
+    assert.strictEqual(count('/cloud-allowed'), 1);
+    assert.strictEqual(count('/h-cloud-allowed'), 1);
+    await j('PATCH', '/api/sites/' + site.id, { dcFilter: true }, auth);
+  });
+  await t.test('the IP is never stored', () => {
+    const db = new Database(DB_PATH, { readonly: true });
+    const dump = JSON.stringify(db.prepare('SELECT * FROM events').all());
+    db.close();
+    assert.ok(!dump.includes('198.51.100') && !dump.includes('203.0.113'), 'no IP in events');
+  });
+  await t.test('scraper user agents without "bot" are dropped', async () => {
+    await j('PATCH', '/api/sites/' + site.id, { dcFilter: false }, auth);
+    await collect('/ua-adobe', 'adobeone-datasets/0.1 (Adobe Research; image-text research dataset)');
+    await collect('/ua-meta', 'meta-third-partyagent/1.1 (+https://developers.facebook.com/docs/sharing/webmasters/crawler)');
+    await collect('/ua-bare', 'Mozilla/5.0');
+    await collect('/ua-real');
+    assert.strictEqual(count('/ua-adobe') + count('/ua-meta') + count('/ua-bare'), 0);
+    assert.strictEqual(count('/ua-real'), 1);
+  });
+});

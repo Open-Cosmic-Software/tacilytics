@@ -147,6 +147,8 @@ const norm = (d) => String(d || '').toLowerCase().replace(/^www\./, '').replace(
 if (!db.prepare('PRAGMA table_info(sites)').all().some((c) => c.name === 'timezone')) db.exec("ALTER TABLE sites ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC'");
 // paused sites collect nothing (hosting: trial over / subscription ended). Only an unlimited admin or owner can pause.
 if (!db.prepare('PRAGMA table_info(sites)').all().some((c) => c.name === 'paused')) db.exec('ALTER TABLE sites ADD COLUMN paused INTEGER NOT NULL DEFAULT 0');
+// datacenter filter (2.5): drop visits from cloud / hosting networks (IP checked on arrival, never stored). On by default.
+if (!db.prepare('PRAGMA table_info(sites)').all().some((c) => c.name === 'dc_filter')) db.exec('ALTER TABLE sites ADD COLUMN dc_filter INTEGER NOT NULL DEFAULT 1');
 const getSiteByDomain = db.prepare('SELECT * FROM sites WHERE domain = ?');
 const insSite = db.prepare("INSERT OR IGNORE INTO sites (domain, name, created, timezone) VALUES (?, ?, ?, COALESCE(?, 'UTC'))");
 const allSites = db.prepare('SELECT * FROM sites ORDER BY domain');
@@ -232,9 +234,11 @@ function appPlatform(b) {
 
 // ── UA parsing + bot filter ─────────────────────────────────────────────────
 const BOT_RE = /bot|crawl|spider|slurp|bing|google|yandex|baidu|duckduck|facebookexternal|embedly|quora|pinterest|slackbot|telegrambot|whatsapp|twitter|discordbot|preview|monitor|uptime|pingdom|lighthouse|headless|phantom|curl|wget|python-requests|axios|node-fetch|go-http/i;
+// more non-browser clients (2.5): AI / dataset scrapers and HTTP libraries without "bot" in the name
+const BOT_RE2 = /third-partyagent|facebookcatalog|datasets|scrapy|okhttp|java\/|libwww|httpx|aiohttp|httpclient|python-urllib|ia_archiver|archive\.org|dataprovider|selenium|puppeteer|playwright|^mozilla\/5\.0$/i;
 function parseUA(ua) {
   ua = ua || '';
-  if (!ua || BOT_RE.test(ua)) return null; // drop bots/crawlers entirely
+  if (!ua || BOT_RE.test(ua) || BOT_RE2.test(ua)) return null; // drop bots/crawlers entirely
   let browser = 'Other', os = 'Other', device = 'Desktop';
   if (/iPad/i.test(ua) || (/Tablet/i.test(ua) && !/Mobile/i.test(ua))) device = 'Tablet';
   else if (/Mobi|Android|iPhone|iPod/i.test(ua)) device = 'Mobile';
@@ -266,6 +270,8 @@ const { createDaySalt, dayStr } = require('./day-salt.js');
 // Daily salt: fresh random secret per UTC day in data/.day-salt (0600), never in the DB.
 // Rules and the single-process note live in day-salt.js.
 const SALT_FILE = path.join(path.dirname(DB_PATH), '.day-salt');
+const dc = require('./datacenter.js').createDatacenterCheck({ dir: path.dirname(DB_PATH) });
+dc.start();
 const todaysSalt = createDaySalt(SALT_FILE);
 // one-time cleanup of the short-lived DB table from 03934ed: zero the pages, flush the WAL
 db.pragma('secure_delete = ON');
@@ -346,7 +352,7 @@ function collect(req, res) {
   // A bot-looking UA is still dropped, so the bot filter cannot be bypassed by just adding `pf`.
   const rawUa = req.headers['user-agent'] || '';
   let ua = parseUA(rawUa);
-  if (platform && rawUa && !BOT_RE.test(rawUa)) {
+  if (platform && rawUa && !BOT_RE.test(rawUa) && !BOT_RE2.test(rawUa)) {
     const dv = String(b.dv || '').toLowerCase();
     ua = { browser: 'App', os: APP_PLATFORMS[platform], device: dv === 'tablet' ? 'Tablet' : dv === 'desktop' ? 'Desktop' : (platform === 'android' || platform === 'ios') ? 'Mobile' : 'Desktop' };
   }
@@ -362,6 +368,7 @@ function collect(req, res) {
   try { pth = decodeURI(pth); } catch {}
   if (pth.length > 1) pth = pth.replace(/\/+$/, '') || '/';
   const ip = clientIp(req);
+  if (site.dc_filter && dc.isDatacenter(ip)) return res.status(204).end(); // cloud / hosting network: not a person
   // apps may send `sid`: a random id the SDK draws per app launch and never persists (no device id).
   // Mobile carriers put many phones behind one IP, so IP+UA alone would merge app users.
   const sid = platform ? String(b.sid || '').slice(0, 64) : '';
@@ -480,7 +487,12 @@ app.patch('/api/sites/:id', adminOnly, (req, res) => {
     db.prepare('UPDATE sites SET paused = ? WHERE id = ?').run(paused, id);
     if (paused !== site.paused) audit(res, paused ? 'site.pause' : 'site.resume', site.domain);
   }
-  if (b.timezone !== undefined || b.paused === undefined) {
+  if (b.dcFilter !== undefined) {
+    const v = b.dcFilter ? 1 : 0;
+    db.prepare('UPDATE sites SET dc_filter = ? WHERE id = ?').run(v, id);
+    if (v !== site.dc_filter) audit(res, v ? 'site.dcfilter.on' : 'site.dcfilter.off', site.domain);
+  }
+  if (b.timezone !== undefined || (b.paused === undefined && b.dcFilter === undefined)) {
     const timezone = TZ.validTz(String(b.timezone || ''));
     if (!timezone) return res.status(400).json({ error: 'Unknown time zone' });
     db.prepare('UPDATE sites SET timezone = ? WHERE id = ?').run(timezone, id);
@@ -552,6 +564,7 @@ app.post('/api/v1/hit', auth, (req, res) => {
   const ip = String(b.ip || '').trim();
   // without the visitor IP every visitor would fall onto one hash: refuse instead of counting wrong
   if (!net.isIP(ip)) return res.status(400).json({ error: 'ip (the visitor IP) is required for server mode' });
+  if (site.dc_filter && dc.isDatacenter(ip)) return res.status(204).end(); // cloud / hosting network: not a person
   // prefetch / prerender requests are not visits (Sec-Purpose / Purpose header of the visitor request)
   if (PREFETCH_RE.test(String(b.purpose || ''))) return res.status(204).end();
   const rawUa = String(b.ua || '').slice(0, 512);

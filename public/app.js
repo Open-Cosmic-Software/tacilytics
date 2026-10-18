@@ -145,13 +145,13 @@
   function showTz() { var s = currentSite(); $('tzName').textContent = s ? String(s.timezone || 'UTC').replace(/_/g, ' ') : 'UTC'; $('tzBtn').classList.toggle('hide', !s); }
   $('tzBtn').onclick = function () {
     var s = currentSite(); if (!s) return;
-    $('tzSite').textContent = s.domain; $('tzErr').textContent = ''; fillTz($('tzSelect'), s.timezone || 'UTC');
+    $('tzSite').textContent = s.domain; $('tzErr').textContent = ''; fillTz($('tzSelect'), s.timezone || 'UTC'); $('dcFilter').checked = s.dc_filter !== 0;
     $('tzModal').classList.remove('hide'); $('tzSelect').focus();
   };
   $('cancelTz').onclick = function () { closeModal($('tzModal'), { force: true }); };
   $('saveTz').onclick = function () {
     var s = currentSite(); if (!s) return;
-    api('/api/sites/' + s.id, { method: 'PATCH', body: JSON.stringify({ timezone: $('tzSelect').value }) }).then(function (r) {
+    api('/api/sites/' + s.id, { method: 'PATCH', body: JSON.stringify({ timezone: $('tzSelect').value, dcFilter: $('dcFilter').checked }) }).then(function (r) {
       if (r.error) { $('tzErr').textContent = r.error; return; }
       closeModal($('tzModal'), { force: true });
       loadSites().then(load);
