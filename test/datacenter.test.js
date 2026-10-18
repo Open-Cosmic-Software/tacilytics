@@ -83,6 +83,21 @@ test('datacenter filter in the server', async (t) => {
     db.close();
     assert.ok(!dump.includes('198.51.100') && !dump.includes('203.0.113'), 'no IP in events');
   });
+  await t.test('PATCH validates first: a bad time zone changes nothing, dcFilter must be boolean', async () => {
+    assert.strictEqual((await j('PATCH', '/api/sites/' + site.id, { dcFilter: false, timezone: 'Bogus/Zone' }, auth)).status, 400);
+    assert.strictEqual((await j('PATCH', '/api/sites/' + site.id, { dcFilter: 'false' }, auth)).status, 400);
+    assert.strictEqual((await j('PATCH', '/api/sites/' + site.id, { dcFilter: null }, auth)).status, 400);
+    const db = new Database(DB_PATH, { readonly: true });
+    assert.strictEqual(db.prepare('SELECT dc_filter FROM sites WHERE id = ?').get(site.id).dc_filter, 1, 'still on');
+    db.close();
+  });
+  await t.test('native apps may use OkHttp; websites with a bare HTTP library are dropped', async () => {
+    await j('PATCH', '/api/sites/' + site.id, { dcFilter: false }, auth);
+    await fetch(base + '/api/collect', { method: 'POST', headers: { 'Content-Type': 'text/plain', 'User-Agent': 'okhttp/4.12.0' }, body: JSON.stringify({ d: 'dc.test', p: '/app-okhttp', pf: 'android' }) });
+    await collect('/web-okhttp', 'okhttp/4.12.0');
+    assert.strictEqual(count('/app-okhttp'), 1);
+    assert.strictEqual(count('/web-okhttp'), 0);
+  });
   await t.test('scraper user agents without "bot" are dropped', async () => {
     await j('PATCH', '/api/sites/' + site.id, { dcFilter: false }, auth);
     await collect('/ua-adobe', 'adobeone-datasets/0.1 (Adobe Research; image-text research dataset)');
@@ -92,4 +107,33 @@ test('datacenter filter in the server', async (t) => {
     assert.strictEqual(count('/ua-adobe') + count('/ua-meta') + count('/ua-bare'), 0);
     assert.strictEqual(count('/ua-real'), 1);
   });
+});
+
+test('datacenter list: a broken or hostile list cannot drop everyone', () => {
+  const { parseList, validate } = T;
+  assert.deepStrictEqual(parseList('1.2.3.4/\n1.2.3.4/ \n1.2.3.4/0x10\n1.2.3.4/1e1\n2001:db8::/\n0.0.0.0/0\n::/0\n5.0.0.0/7').v4, [], 'no /0, no loose prefixes, nothing below /8');
+  assert.deepStrictEqual(parseList('::/0\n2001::/15').v6, [], 'nothing below /16 for IPv6');
+  const big = Array.from({ length: 70 }, (_, i) => `${i + 1}.0.0.0/8`).join('\n');
+  assert.match(validate(parseList(big)), /covers/, 'more than 25 % of IPv4 is refused');
+  assert.match(validate(parseList('79.192.0.0/10')), /residential/, 'a residential canary inside is refused');
+  const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'taci-dcbad-')), 'bad.txt');
+  fs.writeFileSync(f, big);
+  const c = createDatacenterCheck({ files: f, log: {} });
+  c.start();
+  assert.strictEqual(c.loaded, false);
+  assert.strictEqual(c.isDatacenter('8.8.8.8'), false, 'refused list = filter off');
+});
+
+test('iCloud Private Relay is allowed through, and without the relay list the downloaded filter stays off', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'taci-relay-'));
+  const dcList = path.join(tmp, 'dc.txt');
+  const relay = path.join(tmp, 'relay.csv');
+  fs.writeFileSync(dcList, '172.224.0.0/12\n146.75.0.0/16\n34.64.0.0/10\n');
+  fs.writeFileSync(relay, Array.from({ length: 120 }, (_, i) => `172.224.${i}.0/24,DE,DE-NW,Bestwig,`).join('\n') + '\n2a02:26f7:b3c0::/48,DE,DE-NW,,\n');
+  const c = createDatacenterCheck({ files: dcList, relayFile: relay, log: {} });
+  c.start();
+  assert.strictEqual(c.isDatacenter('172.224.5.9'), false, 'relay egress = real Safari visitor');
+  assert.strictEqual(c.isDatacenter('172.230.1.1'), true, 'rest of the network still filtered');
+  assert.strictEqual(c.isDatacenter('34.80.0.1'), true);
+  assert.strictEqual(c.isDatacenter('fe80::1%eth0'), false, 'zone id does not crash');
 });

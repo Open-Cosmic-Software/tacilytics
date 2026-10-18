@@ -159,14 +159,26 @@ const insEvent = db.prepare(`INSERT INTO events (site_id, ts, day, path, source,
 // source of the same visitor's previous page view within 30 minutes. Server-side only (visitor hash),
 // so strict mode reads nothing new on the device.
 const VISIT_GAP = 30 * 60000;
-const lastSource = db.prepare('SELECT source FROM events WHERE site_id = ? AND vh = ? AND name IS NULL AND ts >= ? ORDER BY id DESC LIMIT 1');
-function visitSource(siteId, vh, ts, utm, referrer, domain) {
-  if (utm) return utm;
+// The visitor hash is salted per UTC day, so a visit never spans two days: `day` is exact and lets
+// SQLite use idx_events_vh instead of scanning every event of the site in the window.
+const lastSource = db.prepare('SELECT source, utm_medium, utm_campaign FROM events INDEXED BY idx_events_vh WHERE site_id = ? AND vh = ? AND day = ? AND name IS NULL AND ts >= ? ORDER BY id DESC LIMIT 1');
+// → { source, medium, campaign }. UTM medium / campaign travel with an inherited source; a page
+// view with its own UTM keeps its own. A return from a payment provider keeps the visit's source
+// (the raw referrer column still has the host).
+function visitSource(siteId, vh, day, ts, utm, referrer, domain, medium, campaign) {
+  if (utm) return { source: utm, medium, campaign };
   if (referrer) {
-    try { const h = norm(new URL(referrer).hostname); if (h && h !== domain) return h; } catch {}
+    let h = '';
+    try { h = norm(new URL(referrer).hostname); } catch {}
+    if (h && h !== domain && !isPaymentHost(h)) return { source: h, medium, campaign };
+    if (h && h !== domain) {
+      const prev = lastSource.get(siteId, vh, day, ts - VISIT_GAP);
+      return prev ? { source: prev.source, medium: medium || prev.utm_medium, campaign: campaign || prev.utm_campaign } : { source: h, medium, campaign };
+    }
   }
-  const prev = lastSource.get(siteId, vh, ts - VISIT_GAP);
-  return (prev && prev.source) || 'Direct';
+  if (medium || campaign) return { source: 'Direct', medium, campaign };
+  const prev = lastSource.get(siteId, vh, day, ts - VISIT_GAP);
+  return prev ? { source: prev.source || 'Direct', medium: prev.utm_medium, campaign: prev.utm_campaign } : { source: 'Direct', medium: null, campaign: null };
 }
 // engagement: attach a visit duration (seconds) to the visitor's most recent pageview for that path.
 const updDur = db.prepare(`UPDATE events SET dur = MAX(COALESCE(dur, 0), @dur), scroll = CASE WHEN @scroll IS NULL THEN scroll ELSE MAX(COALESCE(scroll, 0), @scroll) END WHERE id = (
@@ -235,10 +247,13 @@ function appPlatform(b) {
 // ── UA parsing + bot filter ─────────────────────────────────────────────────
 const BOT_RE = /bot|crawl|spider|slurp|bing|google|yandex|baidu|duckduck|facebookexternal|embedly|quora|pinterest|slackbot|telegrambot|whatsapp|twitter|discordbot|preview|monitor|uptime|pingdom|lighthouse|headless|phantom|curl|wget|python-requests|axios|node-fetch|go-http/i;
 // more non-browser clients (2.5): AI / dataset scrapers and HTTP libraries without "bot" in the name
-const BOT_RE2 = /third-partyagent|facebookcatalog|datasets|scrapy|okhttp|java\/|libwww|httpx|aiohttp|httpclient|python-urllib|ia_archiver|archive\.org|dataprovider|selenium|puppeteer|playwright|^mozilla\/5\.0$/i;
+// Split so native apps can still use a plain HTTP client: apps (with `pf`) are only checked against
+// BOT_RE + BOT_SCRAPER_RE, websites additionally against BOT_LIB_RE (React Native / OkHttp apps send `okhttp/4.x`).
+const BOT_SCRAPER_RE = /third-partyagent|facebookcatalog|datasets|scrapy|ia_archiver|archive\.org|dataprovider|selenium|puppeteer|playwright/i;
+const BOT_LIB_RE = /okhttp|java\/|libwww|httpx|aiohttp|httpclient|python-urllib|^mozilla\/5\.0$/i;
 function parseUA(ua) {
   ua = ua || '';
-  if (!ua || BOT_RE.test(ua) || BOT_RE2.test(ua)) return null; // drop bots/crawlers entirely
+  if (!ua || BOT_RE.test(ua) || BOT_SCRAPER_RE.test(ua) || BOT_LIB_RE.test(ua)) return null; // drop bots/crawlers entirely
   let browser = 'Other', os = 'Other', device = 'Desktop';
   if (/iPad/i.test(ua) || (/Tablet/i.test(ua) && !/Mobile/i.test(ua))) device = 'Tablet';
   else if (/Mobi|Android|iPhone|iPod/i.test(ua)) device = 'Mobile';
@@ -272,6 +287,21 @@ const { createDaySalt, dayStr } = require('./day-salt.js');
 const SALT_FILE = path.join(path.dirname(DB_PATH), '.day-salt');
 const dc = require('./datacenter.js').createDatacenterCheck({ dir: path.dirname(DB_PATH) });
 dc.start();
+// A wrong proxy setup (TRUST_PROXY too low, proxy on a cloud box, server mode forwarding its own IP)
+// would make EVERY hit look like a datacenter and vanish. Count per site and hour (numbers only, no
+// IPs) and warn loudly when most of a site's traffic is being dropped.
+const dcStats = new Map();
+function dcDropped(site, dropped) {
+  const hour = Math.floor(Date.now() / 3600000);
+  let st = dcStats.get(site.id);
+  if (!st || st.hour !== hour) { st = { hour, total: 0, dropped: 0, warned: false }; dcStats.set(site.id, st); }
+  st.total++; if (dropped) st.dropped++;
+  if (!st.warned && st.total >= 20 && st.dropped / st.total > 0.5) {
+    st.warned = true;
+    console.warn(`⚠️  datacenter filter: ${st.dropped} of ${st.total} hits for ${site.domain} this hour came from cloud / hosting networks and were not counted. If that is not a bot wave, check TRUST_PROXY (and the ip you send in server mode), or switch the filter off for this site.`);
+  }
+  return dropped;
+}
 const todaysSalt = createDaySalt(SALT_FILE);
 // one-time cleanup of the short-lived DB table from 03934ed: zero the pages, flush the WAL
 db.pragma('secure_delete = ON');
@@ -352,7 +382,7 @@ function collect(req, res) {
   // A bot-looking UA is still dropped, so the bot filter cannot be bypassed by just adding `pf`.
   const rawUa = req.headers['user-agent'] || '';
   let ua = parseUA(rawUa);
-  if (platform && rawUa && !BOT_RE.test(rawUa) && !BOT_RE2.test(rawUa)) {
+  if (platform && rawUa && !BOT_RE.test(rawUa) && !BOT_SCRAPER_RE.test(rawUa)) {
     const dv = String(b.dv || '').toLowerCase();
     ua = { browser: 'App', os: APP_PLATFORMS[platform], device: dv === 'tablet' ? 'Tablet' : dv === 'desktop' ? 'Desktop' : (platform === 'android' || platform === 'ios') ? 'Mobile' : 'Desktop' };
   }
@@ -368,7 +398,7 @@ function collect(req, res) {
   try { pth = decodeURI(pth); } catch {}
   if (pth.length > 1) pth = pth.replace(/\/+$/, '') || '/';
   const ip = clientIp(req);
-  if (site.dc_filter && dc.isDatacenter(ip)) return res.status(204).end(); // cloud / hosting network: not a person
+  if (site.dc_filter && dcDropped(site, dc.isDatacenter(ip))) return res.status(204).end(); // cloud / hosting network: not a person
   // apps may send `sid`: a random id the SDK draws per app launch and never persists (no device id).
   // Mobile carriers put many phones behind one IP, so IP+UA alone would merge app users.
   const sid = platform ? String(b.sid || '').slice(0, 64) : '';
@@ -392,9 +422,9 @@ function collect(req, res) {
   // referrer → source host
   let referrer = String(b.r || b.referrer || '').slice(0, 512);
   const utm = String(b.s || b.utm || '').slice(0, 60);
-  const source = visitSource(site.id, vh, ts, utm, referrer, domain);
-  const utmMedium = String(b.um || b.utm_medium || '').slice(0, 60).trim() || null;
-  const utmCampaign = String(b.uc || b.utm_campaign || '').slice(0, 80).trim() || null;
+  const vs = visitSource(site.id, vh, day, ts, utm, referrer, domain,
+    String(b.um || b.utm_medium || '').slice(0, 60).trim() || null, String(b.uc || b.utm_campaign || '').slice(0, 80).trim() || null);
+  const source = vs.source; const utmMedium = vs.medium; const utmCampaign = vs.campaign;
   const tz = strict ? null : (String(b.tz || '').slice(0, 60) || null);
   const lang = strict ? acceptLang(req.headers['accept-language']) : (String(b.l || b.lang || '').slice(0, 12).split(',')[0] || null);
   const name = String(b.n || b.name || '').slice(0, 80).trim() || null; // custom event / goal
@@ -480,21 +510,24 @@ app.patch('/api/sites/:id', adminOnly, (req, res) => {
   const site = db.prepare('SELECT * FROM sites WHERE id = ?').get(id);
   if (!site) return res.status(404).json({ error: 'Unknown site' });
   const b = req.body || {};
+  // validate everything first, then write: a 400 must never leave a half-applied (and unaudited) change
+  if (b.paused !== undefined && isLimited(req)) return res.status(403).json({ error: 'Your role does not allow this' }); // operator's switch (hosting)
+  if (b.dcFilter !== undefined && typeof b.dcFilter !== 'boolean') return res.status(400).json({ error: 'dcFilter must be true or false' });
+  const setTz = b.timezone !== undefined || (b.paused === undefined && b.dcFilter === undefined);
+  const timezone = setTz ? TZ.validTz(String(b.timezone || '')) : null;
+  if (setTz && !timezone) return res.status(400).json({ error: 'Unknown time zone' });
   if (b.paused !== undefined) {
-    // pausing is the operator's switch (hosting: trial or subscription ended), never the customer's
-    if (isLimited(req)) return res.status(403).json({ error: 'Your role does not allow this' });
     const paused = b.paused ? 1 : 0;
     db.prepare('UPDATE sites SET paused = ? WHERE id = ?').run(paused, id);
     if (paused !== site.paused) audit(res, paused ? 'site.pause' : 'site.resume', site.domain);
   }
   if (b.dcFilter !== undefined) {
+    // the site's own admin may switch it: it only decides which of their own visits are counted
     const v = b.dcFilter ? 1 : 0;
     db.prepare('UPDATE sites SET dc_filter = ? WHERE id = ?').run(v, id);
     if (v !== site.dc_filter) audit(res, v ? 'site.dcfilter.on' : 'site.dcfilter.off', site.domain);
   }
-  if (b.timezone !== undefined || (b.paused === undefined && b.dcFilter === undefined)) {
-    const timezone = TZ.validTz(String(b.timezone || ''));
-    if (!timezone) return res.status(400).json({ error: 'Unknown time zone' });
+  if (setTz) {
     db.prepare('UPDATE sites SET timezone = ? WHERE id = ?').run(timezone, id);
     if (timezone !== site.timezone) audit(res, 'site.timezone', site.domain + ': ' + site.timezone + ' → ' + timezone);
   }
@@ -564,7 +597,7 @@ app.post('/api/v1/hit', auth, (req, res) => {
   const ip = String(b.ip || '').trim();
   // without the visitor IP every visitor would fall onto one hash: refuse instead of counting wrong
   if (!net.isIP(ip)) return res.status(400).json({ error: 'ip (the visitor IP) is required for server mode' });
-  if (site.dc_filter && dc.isDatacenter(ip)) return res.status(204).end(); // cloud / hosting network: not a person
+  if (site.dc_filter && dcDropped(site, dc.isDatacenter(ip))) return res.status(204).end(); // cloud / hosting network: not a person
   // prefetch / prerender requests are not visits (Sec-Purpose / Purpose header of the visitor request)
   if (PREFETCH_RE.test(String(b.purpose || ''))) return res.status(204).end();
   const rawUa = String(b.ua || '').slice(0, 512);
@@ -587,14 +620,16 @@ app.post('/api/v1/hit', auth, (req, res) => {
   const referrer = String(b.referrer || b.r || '').slice(0, 512);
   const q = url.searchParams;
   const utm = String(q.get('utm_source') || q.get('ref') || '').slice(0, 60).trim();
-  const source = visitSource(site.id, vh, ts, utm, referrer, domain);
+  const vs = visitSource(site.id, vh, day, ts, utm, referrer, domain,
+    String(q.get('utm_medium') || '').slice(0, 60).trim() || null, String(q.get('utm_campaign') || '').slice(0, 80).trim() || null);
+  const source = vs.source;
   const name = String(b.name || b.n || '').slice(0, 80).trim() || null; // optional server-side goal (e.g. Purchase)
   insEvent.run({
     site_id: site.id, ts, day, path: pth, source, referrer: referrer || null,
     country: null, tz: null, browser: ua.browser, os: ua.os, device: ua.device,
     lang: acceptLang(b.lang), name,
-    utm_medium: String(q.get('utm_medium') || '').slice(0, 60).trim() || null,
-    utm_campaign: String(q.get('utm_campaign') || '').slice(0, 80).trim() || null,
+    utm_medium: vs.medium,
+    utm_campaign: vs.campaign,
     dur: null, props: name ? sanitizeProps(b.props) : null, vh, platform: null, app_version: null,
   });
   res.status(204).end();

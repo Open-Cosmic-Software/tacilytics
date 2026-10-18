@@ -14,6 +14,16 @@ const DEFAULT_URLS = [
   'https://raw.githubusercontent.com/X4BNet/lists_vpn/main/output/datacenter/ipv4.txt',
   'https://raw.githubusercontent.com/X4BNet/lists_vpn/main/output/datacenter/ipv6.txt',
 ];
+// iCloud Private Relay runs on Akamai / Fastly / Cloudflare networks that the datacenter list contains.
+// Those are real Safari visitors, so Apple's published egress ranges are an allowlist checked first.
+const RELAY_URL = 'https://mask-api.icloud.com/egress-ip-ranges.csv';
+
+// sanity limits: a broken or hostile list must never be able to drop everyone
+const MIN_BITS_V4 = 8;
+const MIN_BITS_V6 = 16;
+const MAX_V4_SHARE = 0.25; // today ~9 % of the IPv4 space
+// residential / ISP addresses that must never be inside a datacenter list (Telekom, Vodafone, Comcast, Telekom v6)
+const CANARIES = ['79.192.0.1', '84.150.3.3', '91.64.1.1', '73.0.0.1', '2003::1'];
 
 function v4ToInt(ip) {
   const p = ip.split('.');
@@ -34,22 +44,25 @@ function v6ToBig(ip) {
 }
 
 // parse "a.b.c.d/nn" and "x::/nn" lines into sorted, merged [start, end] ranges
-function parseList(text) {
+function parseList(text, { minV4 = MIN_BITS_V4, minV6 = MIN_BITS_V6 } = {}) {
   const v4 = []; const v6 = [];
   for (const raw of String(text).split('\n')) {
     const line = raw.split('#')[0].trim();
     if (!line) continue;
-    const [addr, bitsS] = line.split('/');
+    const [addrRaw, bitsS, extra] = line.split(',')[0].trim().split('/');
+    const addr = addrRaw.trim();
+    if (extra !== undefined) continue;
+    if (bitsS !== undefined && !/^\d{1,3}$/.test(bitsS)) continue; // "1.2.3.4/" must not become /0
     const kind = net.isIP(addr);
     if (kind === 4) {
       const bits = bitsS === undefined ? 32 : +bitsS;
-      if (!(bits >= 0 && bits <= 32)) continue;
+      if (!(bits >= minV4 && bits <= 32)) continue;
       const size = 2 ** (32 - bits);
       const start = Math.floor(v4ToInt(addr) / size) * size;
       v4.push([start, start + size - 1]);
     } else if (kind === 6) {
       const bits = bitsS === undefined ? 128 : +bitsS;
-      if (!(bits >= 0 && bits <= 128)) continue;
+      if (!(bits >= minV6 && bits <= 128)) continue;
       const host = 128n - BigInt(bits);
       const start = (v6ToBig(addr) >> host) << host;
       v6.push([start, start + (1n << host) - 1n]);
@@ -78,57 +91,106 @@ function inRanges(ranges, x) {
   return false;
 }
 
-function createDatacenterCheck({ dir, mode = process.env.TACILYTICS_DATACENTER, files = process.env.TACILYTICS_DATACENTER_FILE, log = console } = {}) {
+function v4Share(l) { let n = 0; for (const [a, b] of l.v4) n += b - a + 1; return n / 2 ** 32; }
+
+// Reject a whole list that looks wrong instead of trusting it. Returns an error text or null.
+function validate(l) {
+  if (!l.v4.length && !l.v6.length) return 'no ranges';
+  const share = v4Share(l);
+  if (share > MAX_V4_SHARE) return `covers ${(share * 100).toFixed(1)} % of IPv4 (limit ${MAX_V4_SHARE * 100} %)`;
+  for (const c of CANARIES) if (lookup(l, c)) return 'contains residential address ' + c;
+  return null;
+}
+function lookup(l, ip) {
+  const kind = net.isIP(ip);
+  if (kind === 4) return inRanges(l.v4, v4ToInt(ip));
+  if (kind === 6) return inRanges(l.v6, v6ToBig(ip));
+  return false;
+}
+// Apple relay CSV: "prefix,country,region,city,". Relay prefixes are small, no minimum length.
+function parseRelay(text) {
+  return parseList(String(text).split('\n').map((l) => l.split(',')[0]).join('\n'), { minV4: 0, minV6: 0 });
+}
+
+function createDatacenterCheck({ dir, mode = process.env.TACILYTICS_DATACENTER, files = process.env.TACILYTICS_DATACENTER_FILE,
+  relayFile = process.env.TACILYTICS_RELAY_FILE, log = console } = {}) {
   let list = { v4: [], v6: [] };
+  let relay = { v4: [], v6: [] };
   let loaded = false;
+  let loadedAt = 0;
+  let retryMs = 5 * 60000;
   const off = String(mode || '').toLowerCase() === 'off';
-  const cache = dir ? require('path').join(dir, '.datacenter-ranges.txt') : null;
+  const P = require('path');
+  const cache = dir ? P.join(dir, '.datacenter-ranges.txt') : null;
+  const relayCache = dir ? P.join(dir, '.relay-ranges.csv') : null;
+  const say = (k, m) => { if (log[k]) log[k]('datacenter check: ' + m); };
 
   function use(text, from) {
     const l = parseList(text);
-    if (!l.v4.length && !l.v6.length) return false;
-    list = l; loaded = true;
-    log.info && log.info(`datacenter check: ${l.v4.length} IPv4 + ${l.v6.length} IPv6 ranges (${from})`);
+    const bad = validate(l);
+    if (bad) { say('warn', `list from ${from} rejected (${bad})` + (loaded ? ', keeping the last list' : ', filter stays off')); return false; }
+    list = l; loaded = true; loadedAt = Date.now();
+    say('info', `${l.v4.length} IPv4 + ${l.v6.length} IPv6 ranges (${from}, ${(v4Share(l) * 100).toFixed(1)} % of IPv4)`);
     return true;
   }
+  function useRelay(text, from) {
+    const r = parseRelay(text);
+    const lines = String(text).split('\n').filter((l) => /^[0-9a-f:.]+\/\d{1,3},/i.test(l)).length;
+    if (lines < 100) { say('warn', `relay list from ${from} too short, ignored`); return false; }
+    relay = r;
+    say('info', `${r.v4.length} IPv4 + ${r.v6.length} IPv6 iCloud Private Relay ranges allowed (${from})`);
+    return true;
+  }
+  const writeCache = (f, text) => { if (!f) return; const tmp = f + '.tmp'; fs.writeFileSync(tmp, text, { mode: 0o600 }); fs.renameSync(tmp, f); };
+  async function get(u) {
+    const r = await fetch(u, { signal: AbortSignal.timeout(30000) });
+    if (!r.ok) throw new Error(u + ' → HTTP ' + r.status);
+    return r.text();
+  }
+  let timer = null;
+  function schedule(ms) { if (timer) clearTimeout(timer); timer = setTimeout(refresh, ms); if (timer.unref) timer.unref(); }
   async function refresh() {
     if (off) return;
+    let ok = true;
     try {
-      const texts = await Promise.all(DEFAULT_URLS.map(async (u) => {
-        const r = await fetch(u, { signal: AbortSignal.timeout(30000) });
-        if (!r.ok) throw new Error(u + ' → HTTP ' + r.status);
-        return r.text();
-      }));
-      const text = texts.join('\n');
-      // sanity: a real list has thousands of ranges; a tiny or empty answer keeps the old one
-      if (text.split('\n').length < 1000) throw new Error('list too short');
-      if (use(text, 'download') && cache) { const tmp = cache + '.tmp'; fs.writeFileSync(tmp, text, { mode: 0o600 }); fs.renameSync(tmp, cache); }
-    } catch (e) {
-      log.warn && log.warn('datacenter check: refresh failed (' + e.message + ')' + (loaded ? ', keeping the last list' : ', check stays off until a list loads'));
-    }
+      const text = (await Promise.all(DEFAULT_URLS.map(get))).join('\n');
+      if (use(text, 'download')) writeCache(cache, text); else ok = false;
+    } catch (e) { ok = false; say('warn', 'refresh failed (' + e.message + ')' + (loaded ? ', keeping the last list' : ', filter stays off until a list loads')); }
+    try { const t = await get(RELAY_URL); if (useRelay(t, 'download')) writeCache(relayCache, t); } catch (e) { say('warn', 'relay list refresh failed (' + e.message + ')'); }
+    // retry with backoff while something failed, otherwise once a day
+    if (ok) { retryMs = 5 * 60000; schedule(24 * 3600 * 1000); } else { schedule(retryMs); retryMs = Math.min(retryMs * 4, 6 * 3600 * 1000); }
   }
   function start() {
-    if (off) { log.info && log.info('datacenter check: off (TACILYTICS_DATACENTER=off)'); return; }
+    if (off) { say('info', 'off (TACILYTICS_DATACENTER=off)'); return; }
+    if (relayFile) { try { useRelay(fs.readFileSync(relayFile, 'utf8'), 'file'); } catch (e) { say('warn', 'relay file: ' + e.message); } }
     if (files) {
       // fixed local list (offline installs, tests): no download
-      const text = String(files).split(',').map((f) => fs.readFileSync(f.trim(), 'utf8')).join('\n');
-      use(text, 'file');
+      try { use(String(files).split(',').map((f) => fs.readFileSync(f.trim(), 'utf8')).join('\n'), 'file'); } catch (e) { say('warn', 'list file: ' + e.message); }
       return;
     }
-    if (cache && fs.existsSync(cache)) { try { use(fs.readFileSync(cache, 'utf8'), 'cache'); } catch {} }
-    refresh();
-    setInterval(refresh, 24 * 3600 * 1000).unref();
+    let fresh = false;
+    if (relayCache && fs.existsSync(relayCache)) { try { useRelay(fs.readFileSync(relayCache, 'utf8'), 'cache'); } catch {} }
+    if (cache && fs.existsSync(cache)) {
+      try {
+        const age = Date.now() - fs.statSync(cache).mtimeMs;
+        if (use(fs.readFileSync(cache, 'utf8'), 'cache')) { loadedAt = Date.now() - age; fresh = age < 24 * 3600 * 1000; }
+        if (age > 7 * 24 * 3600 * 1000) say('warn', `cached list is ${Math.round(age / 86400000)} days old`);
+      } catch {}
+    }
+    if (fresh) schedule(24 * 3600 * 1000 - (Date.now() - loadedAt)); else refresh();
   }
   function isDatacenter(ip) {
     if (!loaded) return false;
-    let s = String(ip || '');
+    let s = String(ip || '').split('%')[0];
     if (s.startsWith('::ffff:') && net.isIPv4(s.slice(7))) s = s.slice(7);
-    const kind = net.isIP(s);
-    if (kind === 4) return inRanges(list.v4, v4ToInt(s));
-    if (kind === 6) return inRanges(list.v6, v6ToBig(s));
-    return false;
+    if (!net.isIP(s)) return false;
+    // without Apple's relay allowlist the datacenter list would drop iCloud Private Relay users
+    // (Akamai / Fastly egress): then the filter stays off. Only a fixed local list may run without it.
+    if (!relay.v4.length && !relay.v6.length && !files) return false;
+    if (lookup(relay, s)) return false; // iCloud Private Relay = a real person
+    return lookup(list, s);
   }
-  return { start, refresh, isDatacenter, get loaded() { return loaded; } };
+  return { start, refresh, isDatacenter, get loaded() { return loaded; }, get loadedAt() { return loadedAt; } };
 }
 
-module.exports = { createDatacenterCheck, _test: { parseList, inRanges, v4ToInt, v6ToBig } };
+module.exports = { createDatacenterCheck, _test: { parseList, parseRelay, validate, inRanges, v4ToInt, v6ToBig } };

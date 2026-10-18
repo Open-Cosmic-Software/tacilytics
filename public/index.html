@@ -227,7 +227,7 @@
     <p class="muted small">Unique visitors per day are an approximation outside UTC: the anonymous visitor ID changes at midnight UTC.</p>
     <div id="tzErr" class="err"></div>
     <select id="tzSelect" class="tz-select"></select>
-    <label class="check" style="display:flex;gap:8px;align-items:flex-start;margin:14px 0 4px;text-align:left"><input type="checkbox" id="dcFilter"> <span>Ignore visits from cloud and hosting networks (scrapers). The IP is checked on arrival and never stored. Visitors behind some VPNs are not counted either.</span></label>
+    <label class="check" style="display:flex;gap:8px;align-items:flex-start;margin:14px 0 4px;text-align:left"><input type="checkbox" id="dcFilter"> <span>Ignore visits from cloud and hosting networks (scrapers). The IP is checked on arrival and never stored. iCloud Private Relay is let through; commercial VPNs and cloud desktops are not counted.</span></label>
     <button class="btn" id="saveTz">Save</button>
     <button class="btn ghost" id="cancelTz" style="margin-top:10px">Cancel</button>
   </div>

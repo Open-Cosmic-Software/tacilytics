@@ -344,8 +344,14 @@ works the same and nothing extra is read on the device.
 that pretend to be a normal browser usually run in a cloud: by default, visits from cloud and hosting
 networks are ignored too (list: [X4BNet/lists_vpn](https://github.com/X4BNet/lists_vpn) *datacenter*,
 MIT, downloaded once a day — no visitor data leaves your server). The IP is checked on arrival and
-never stored. Honest trade-off: visitors behind some VPNs are not counted either. Switch it off per
-site in the time-zone dialog, or for the whole server with `TACILYTICS_DATACENTER=off`.
+never stored. iCloud Private Relay runs on the same cloud networks, so Apple's published egress list is
+downloaded too and always let through; without it the filter stays off. A list that looks wrong (a
+range shorter than /8, more than 25 % of IPv4, a known residential address inside) is refused, and a
+failed download is retried with backoff. Honest trade-off: commercial VPNs, Opera's built-in VPN and
+cloud desktops (Windows 365, AVD) are not counted either — for B2B sites consider switching it off.
+If more than half of a site's hits in an hour are dropped, the server log warns (usually a proxy
+setup: check `TRUST_PROXY`). Switch it off per site in the time-zone dialog, or for the whole server
+with `TACILYTICS_DATACENTER=off`.
 
 ## Light mode & German
 
@@ -400,6 +406,7 @@ The server-wide `API_KEY` from `.env` keeps owner rights for agents and the CLI 
 | `AUDIT_RETENTION_DAYS` | `365` | How long the team activity log is kept (min. 30) |
 | `TACILYTICS_DATACENTER` | on | `off` disables the cloud / hosting network filter server-wide (no list download) |
 | `TACILYTICS_DATACENTER_FILE` | — | Use local range lists instead of the daily download (comma-separated paths, CIDR per line), e.g. for offline installs |
+| `TACILYTICS_RELAY_FILE` | — | Local copy of Apple's iCloud Private Relay egress CSV (with a local datacenter list) |
 | `DATA_RETENTION_DAYS` | `0` | `0` = keep forever; `>0` purges raw events older than N days, daily (data minimisation) |
 
 ## Privacy & security
@@ -450,6 +457,7 @@ Issues, ideas and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.
 - Flags: [flag-icons](https://flagicons.lipis.dev) (MIT)
 - Font: [Inter](https://rsms.me/inter/) (SIL OFL 1.1), self-hosted
 - Datacenter ranges: [X4BNet/lists_vpn](https://github.com/X4BNet/lists_vpn) (MIT), downloaded at runtime, not bundled
+- iCloud Private Relay egress ranges: published by Apple (`mask-api.icloud.com`), downloaded at runtime as an allowlist
 
 ## License
 

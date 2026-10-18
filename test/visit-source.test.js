@@ -84,6 +84,25 @@ test('visit source', async (t) => {
     assert.strictEqual(src('/e-next'), 'Direct');
   });
 
+  await t.test('UTM medium and campaign travel with the inherited source', async () => {
+    await collect(7, { p: '/u-land', s: 'newsletter', um: 'email', uc: 'herbst' });
+    await collect(7, { p: '/u-next', r: 'https://shop.test/u-land' });
+    const db = new Database(DB_PATH, { readonly: true });
+    const r = db.prepare("SELECT source, utm_medium, utm_campaign FROM events WHERE path = '/u-next'").get();
+    db.close();
+    assert.deepStrictEqual({ ...r }, { source: 'newsletter', utm_medium: 'email', utm_campaign: 'herbst' });
+  });
+
+  await t.test('a return from PayPal keeps the real source of the visit', async () => {
+    await collect(8, { p: '/p-land', r: 'https://www.bing.com/' });
+    await collect(8, { p: '/p-thanks', r: 'https://www.paypal.com/checkoutnow' });
+    await collect(8, { p: '/p-after', r: 'https://shop.test/p-thanks' });
+    assert.strictEqual(src('/p-thanks'), 'bing.com');
+    assert.strictEqual(src('/p-after'), 'bing.com');
+    await collect(9, { p: '/p-only', r: 'https://www.paypal.com/' });
+    assert.strictEqual(src('/p-only'), 'paypal.com', 'without an earlier page the payment host stays (dashboard lists it separately)');
+  });
+
   await t.test('server mode (/api/v1/hit) inherits too', async () => {
     const hit = (body) => j('POST', '/api/v1/hit', { domain: 'shop.test', ua: ua(6), ip: '198.51.100.9', ...body }, { Authorization: 'Bearer ' + KEY });
     assert.ok((await hit({ path: '/h-land', referrer: 'https://ecosia.org/' })).status < 300);
