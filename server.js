@@ -152,6 +152,20 @@ const insSite = db.prepare("INSERT OR IGNORE INTO sites (domain, name, created, 
 const allSites = db.prepare('SELECT * FROM sites ORDER BY domain');
 const insEvent = db.prepare(`INSERT INTO events (site_id, ts, day, path, source, referrer, country, tz, browser, os, device, lang, name, utm_medium, utm_campaign, dur, props, vh, platform, app_version)
   VALUES (@site_id, @ts, @day, @path, @source, @referrer, @country, @tz, @browser, @os, @device, @lang, @name, @utm_medium, @utm_campaign, @dur, @props, @vh, @platform, @app_version)`);
+// visit source (2.5): like GA/Plausible/Matomo, the source belongs to the VISIT, not to each page view.
+// A page view without an third-party referrer and without UTM (an internal click, a reload) inherits the
+// source of the same visitor's previous page view within 30 minutes. Server-side only (visitor hash),
+// so strict mode reads nothing new on the device.
+const VISIT_GAP = 30 * 60000;
+const lastSource = db.prepare('SELECT source FROM events WHERE site_id = ? AND vh = ? AND name IS NULL AND ts >= ? ORDER BY id DESC LIMIT 1');
+function visitSource(siteId, vh, ts, utm, referrer, domain) {
+  if (utm) return utm;
+  if (referrer) {
+    try { const h = norm(new URL(referrer).hostname); if (h && h !== domain) return h; } catch {}
+  }
+  const prev = lastSource.get(siteId, vh, ts - VISIT_GAP);
+  return (prev && prev.source) || 'Direct';
+}
 // engagement: attach a visit duration (seconds) to the visitor's most recent pageview for that path.
 const updDur = db.prepare(`UPDATE events SET dur = MAX(COALESCE(dur, 0), @dur), scroll = CASE WHEN @scroll IS NULL THEN scroll ELSE MAX(COALESCE(scroll, 0), @scroll) END WHERE id = (
   SELECT id FROM events WHERE site_id = @site_id AND vh = @vh AND name IS NULL AND path = @path AND ts >= @since
@@ -370,12 +384,8 @@ function collect(req, res) {
 
   // referrer → source host
   let referrer = String(b.r || b.referrer || '').slice(0, 512);
-  let source = 'Direct';
   const utm = String(b.s || b.utm || '').slice(0, 60);
-  if (utm) source = utm;
-  else if (referrer) {
-    try { const h = norm(new URL(referrer).hostname); if (h && h !== domain) source = h; } catch {}
-  }
+  const source = visitSource(site.id, vh, ts, utm, referrer, domain);
   const utmMedium = String(b.um || b.utm_medium || '').slice(0, 60).trim() || null;
   const utmCampaign = String(b.uc || b.utm_campaign || '').slice(0, 80).trim() || null;
   const tz = strict ? null : (String(b.tz || '').slice(0, 60) || null);
@@ -563,10 +573,8 @@ app.post('/api/v1/hit', auth, (req, res) => {
 
   const referrer = String(b.referrer || b.r || '').slice(0, 512);
   const q = url.searchParams;
-  let source = 'Direct';
   const utm = String(q.get('utm_source') || q.get('ref') || '').slice(0, 60).trim();
-  if (utm) source = utm;
-  else if (referrer) { try { const h = norm(new URL(referrer).hostname); if (h && h !== domain) source = h; } catch {} }
+  const source = visitSource(site.id, vh, ts, utm, referrer, domain);
   const name = String(b.name || b.n || '').slice(0, 80).trim() || null; // optional server-side goal (e.g. Purchase)
   insEvent.run({
     site_id: site.id, ts, day, path: pth, source, referrer: referrer || null,
