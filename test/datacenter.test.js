@@ -104,6 +104,15 @@ test('datacenter filter in the server', async (t) => {
     assert.strictEqual(count('/h-cloud-allowed'), 1);
     await j('PATCH', '/api/sites/' + site.id, { dcFilter: true }, auth);
   });
+  await t.test('one save with time zone + filter writes both audit rows', async () => {
+    await j('PATCH', '/api/sites/' + site.id, { timezone: 'Europe/Berlin', dcFilter: false }, auth);
+    await sleep(50);
+    const db = new Database(DB_PATH, { readonly: true });
+    const acts = db.prepare("SELECT action FROM audit_log WHERE target LIKE 'dc.test%' ORDER BY id DESC LIMIT 2").all().map((r) => r.action).sort();
+    db.close();
+    assert.deepStrictEqual(acts, ['site.dcfilter.off', 'site.timezone']);
+    await j('PATCH', '/api/sites/' + site.id, { timezone: site.timezone, dcFilter: true }, auth);
+  });
   await t.test('the IP is never stored', () => {
     const db = new Database(DB_PATH, { readonly: true });
     const dump = JSON.stringify(db.prepare('SELECT * FROM events').all());
@@ -206,4 +215,10 @@ test('N1: relay CSV is parsed in one pass and counts only well-formed lines', ()
   assert.strictEqual(r.lines, 2);
   assert.strictEqual(r.v4.length, 1);
   assert.strictEqual(r.v6.length, 1);
+  // a broken file without commas must stay fast (was O(n²) in the first one-pass version)
+  const noComma = Array.from({ length: 300000 }, (_, i) => `172.${i % 250}.0.0/24;DE;;;`).join('\n');
+  const t0 = Date.now();
+  assert.strictEqual(T.parseRelay(noComma).lines, 0);
+  assert.ok(Date.now() - t0 < 2000, 'took ' + (Date.now() - t0) + ' ms');
+  assert.strictEqual(T.parseRelay('\ufeff172.224.0.0/24,DE,,,\r\n172.224.1.0/24,DE,,,').lines, 2, 'BOM + CRLF');
 });

@@ -226,17 +226,25 @@ function setupAuth({ app, db, WEB_PASSWORD, API_KEY, rateLimited, clientIp, site
     res.on('finish', () => {
       if (res.statusCode < 200 || res.statusCode >= 300) return;
       try {
-        const a = res.locals.audit || {};
+        // one row per named action (a single save can change several things, e.g. time zone + filter)
+        const list = res.locals.audits && res.locals.audits.length ? res.locals.audits : [{}];
         const route = req.route ? req.route.path : req.path;
-        const action = a.action || `${req.method} ${route}`;
-        const actor = a.actor !== undefined ? a.actor : actorOf(req.principal);
-        insAudit.run(Date.now(), actor, action, a.target == null ? null : String(a.target).slice(0, 200), clientIp(req));
+        const ts = Date.now();
+        for (const a of list) {
+          const action = a.action || `${req.method} ${route}`;
+          const actor = a.actor !== undefined ? a.actor : actorOf(req.principal);
+          insAudit.run(ts, actor, action, a.target == null ? null : String(a.target).slice(0, 200), clientIp(req));
+        }
       } catch (e) { console.error('audit log:', e.message); }
     });
     next();
   });
   setInterval(() => db.prepare('DELETE FROM audit_log WHERE ts < ?').run(Date.now() - AUDIT_DAYS * 864e5), 6 * 3600e3).unref();
-  const audit = (res, action, target, actor) => { res.locals.audit = { action, target, ...(actor !== undefined ? { actor } : {}) }; };
+  const audit = (res, action, target, actor) => {
+    const a = { action, target, ...(actor !== undefined ? { actor } : {}) };
+    res.locals.audit = a;
+    (res.locals.audits || (res.locals.audits = [])).push(a);
+  };
   if (hasUsers() && !process.env.TACILYTICS_ORIGIN) {
     console.warn('⚠️  TACILYTICS_ORIGIN is not set. Passkeys use the request host, so they break if the dashboard is reached under another host/port or behind a proxy without X-Forwarded-Proto. Set it to the public dashboard URL.');
   }

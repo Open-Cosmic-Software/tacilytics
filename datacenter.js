@@ -126,9 +126,11 @@ function parseRelay(text) {
   const out = [];
   let lines = 0;
   let i = 0;
+  let comma = -1; // reused across lines: a file without commas must not rescan to the end for every line
+  if (t.charCodeAt(0) === 0xfeff) i = 1; // byte-order mark
   while (i < t.length) {
     let nl = t.indexOf('\n', i); if (nl < 0) nl = t.length;
-    const comma = t.indexOf(',', i);
+    if (comma < i && comma !== -2) { comma = t.indexOf(',', i); if (comma < 0) comma = -2; }
     if (comma > i && comma < nl) {
       const prefix = t.slice(i, comma);
       if (/^[0-9a-fA-F:.]+\/\d{1,3}$/.test(prefix)) { out.push(prefix); lines++; }
