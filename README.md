@@ -33,7 +33,7 @@
 - 🚦 **Campaigns & funnels.** Full UTM (`source` / `medium` / `campaign`), entry & exit pages, **goal conversion rates** and **custom event properties**.
 - ⏱️ **Engagement time** — average time-on-page, measured privately (visible seconds only, no extra identifier).
 - 🤖 **Bots & crawlers dropped** automatically, so your numbers stay honest.
-- ⚡ **~2 KB tracker**, SPA-aware (tracks `pushState` / `popstate` route changes), optional **DNT / Global Privacy Control** honoring.
+- ⚡ **~5 KB tracker** (gzip, 14 KB raw, includes the strict mode, goals and revenue), SPA-aware (tracks `pushState` / `popstate` route changes), optional **DNT / Global Privacy Control** honoring.
 - 🗓️ **Data minimisation built in** — optional auto-purge of raw events after a retention window you choose.
 - 🎯 **Custom events & goals**, **live visitors**, **trends**, **custom date ranges**, **CSV export**.
 - 🛰️ **Agent-ready:** a clean `/api/v1` REST API (with segmentation params) + a `tacilytics` CLI (with `--json`).
@@ -345,12 +345,16 @@ that pretend to be a normal browser usually run in a cloud: by default, visits f
 networks are ignored too (list: [X4BNet/lists_vpn](https://github.com/X4BNet/lists_vpn) *datacenter*,
 MIT, downloaded once a day — no visitor data leaves your server). The IP is checked on arrival and
 never stored. iCloud Private Relay runs on the same cloud networks, so Apple's published egress list is
-downloaded too and always let through; without it the filter stays off. A list that looks wrong (a
-range shorter than /8, more than 25 % of IPv4, a known residential address inside) is refused, and a
-failed download is retried with backoff. Honest trade-off: commercial VPNs, Opera's built-in VPN and
+downloaded too and always let through; without it the filter stays off (with a fixed local list via
+`TACILYTICS_DATACENTER_FILE` it runs anyway — set `TACILYTICS_RELAY_FILE` too, the server warns at start).
+A list that looks wrong (an IPv4 range shorter than /8 or IPv6 shorter than /24, more than 25 % of IPv4
+or 0.1 % of global IPv6, a known residential address inside) is refused, and a failed download of either
+list is retried with backoff. The site settings show how many hits were ignored today and grey the
+switch out while the filter is not running. Honest trade-off: commercial VPNs, Opera's built-in VPN and
 cloud desktops (Windows 365, AVD) are not counted either — for B2B sites consider switching it off.
-If more than half of a site's hits in an hour are dropped, the server log warns (usually a proxy
-setup: check `TRUST_PROXY`). Switch it off per site in the time-zone dialog, or for the whole server
+If more than half of a site's hits in an hour are dropped (or all of at least 5 on a small site), the
+server log warns (usually a proxy setup: check `TRUST_PROXY`). Switch it off per site in the site
+settings (clock button), or for the whole server
 with `TACILYTICS_DATACENTER=off`.
 
 ## Light mode & German
@@ -439,7 +443,7 @@ An honest overview. Plausible and Umami are good projects; pick what fits you.
 | Strict mode (no device reads) | ✅ | ❌ | ❌ | ❌ |
 | Mobile app SDK | ✅ Flutter | ❌ | ❌ | ✅ |
 | Runs on | Node + SQLite file | Elixir + Postgres + ClickHouse | Node + Postgres/MySQL | Google |
-| Tracker size | ~2 KB | ~1 KB | ~2 KB | ~45 KB+ |
+| Tracker size (gzip) | ~5 KB | ~1 KB | ~2 KB | ~45 KB+ |
 | Built for big traffic (millions/day) | ⚠️ not yet, SQLite | ✅ | ✅ | ✅ |
 | Self-hosted, you own the data | ✅ | ✅ | ✅ | ❌ |
 | Licence | MIT | AGPL | MIT | proprietary |

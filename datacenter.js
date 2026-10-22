@@ -20,10 +20,13 @@ const RELAY_URL = 'https://mask-api.icloud.com/egress-ip-ranges.csv';
 
 // sanity limits: a broken or hostile list must never be able to drop everyone
 const MIN_BITS_V4 = 8;
-const MIN_BITS_V6 = 16;
+const MIN_BITS_V6 = 24; // the real list's largest IPv6 prefix is /24
 const MAX_V4_SHARE = 0.25; // today ~9 % of the IPv4 space
+const MAX_V6_SHARE = 0.001; // of global unicast 2000::/3, today ~12 ppm
 // residential / ISP addresses that must never be inside a datacenter list (Telekom, Vodafone, Comcast, Telekom v6)
-const CANARIES = ['79.192.0.1', '84.150.3.3', '91.64.1.1', '73.0.0.1', '2003::1'];
+// IPv6: Telekom, Vodafone, T-Mobile, 1&1, O2
+const CANARIES = ['79.192.0.1', '84.150.3.3', '91.64.1.1', '73.0.0.1',
+  '2003::1', '2a02:8108::1', '2a01:598::1', '2001:16b8::1', '2a02:3030::1'];
 
 function v4ToInt(ip) {
   const p = ip.split('.');
@@ -92,12 +95,21 @@ function inRanges(ranges, x) {
 }
 
 function v4Share(l) { let n = 0; for (const [a, b] of l.v4) n += b - a + 1; return n / 2 ** 32; }
+// share of global unicast 2000::/3 (2^125 addresses), counted only for the part inside it
+function v6Share(l) {
+  const lo = 0x2n << 124n; const hi = lo + (1n << 125n) - 1n;
+  let n = 0n;
+  for (const [a, b] of l.v6) { const s = a > lo ? a : lo; const e = b < hi ? b : hi; if (e >= s) n += e - s + 1n; }
+  return Number((n * 1000000n) >> 125n) / 1e6;
+}
 
 // Reject a whole list that looks wrong instead of trusting it. Returns an error text or null.
 function validate(l) {
   if (!l.v4.length && !l.v6.length) return 'no ranges';
   const share = v4Share(l);
   if (share > MAX_V4_SHARE) return `covers ${(share * 100).toFixed(1)} % of IPv4 (limit ${MAX_V4_SHARE * 100} %)`;
+  const share6 = v6Share(l);
+  if (share6 > MAX_V6_SHARE) return `covers ${(share6 * 100).toFixed(3)} % of global IPv6 (limit ${MAX_V6_SHARE * 100} %)`;
   for (const c of CANARIES) if (lookup(l, c)) return 'contains residential address ' + c;
   return null;
 }
@@ -108,8 +120,24 @@ function lookup(l, ip) {
   return false;
 }
 // Apple relay CSV: "prefix,country,region,city,". Relay prefixes are small, no minimum length.
+// One pass over the ~12 MB file: keep only the prefix column and count the well-formed lines.
 function parseRelay(text) {
-  return parseList(String(text).split('\n').map((l) => l.split(',')[0]).join('\n'), { minV4: 0, minV6: 0 });
+  const t = String(text);
+  const out = [];
+  let lines = 0;
+  let i = 0;
+  while (i < t.length) {
+    let nl = t.indexOf('\n', i); if (nl < 0) nl = t.length;
+    const comma = t.indexOf(',', i);
+    if (comma > i && comma < nl) {
+      const prefix = t.slice(i, comma);
+      if (/^[0-9a-fA-F:.]+\/\d{1,3}$/.test(prefix)) { out.push(prefix); lines++; }
+    }
+    i = nl + 1;
+  }
+  const r = parseList(out.join('\n'), { minV4: 0, minV6: 0 });
+  r.lines = lines;
+  return r;
 }
 
 function createDatacenterCheck({ dir, mode = process.env.TACILYTICS_DATACENTER, files = process.env.TACILYTICS_DATACENTER_FILE,
@@ -135,9 +163,8 @@ function createDatacenterCheck({ dir, mode = process.env.TACILYTICS_DATACENTER, 
   }
   function useRelay(text, from) {
     const r = parseRelay(text);
-    const lines = String(text).split('\n').filter((l) => /^[0-9a-f:.]+\/\d{1,3},/i.test(l)).length;
-    if (lines < 100) { say('warn', `relay list from ${from} too short, ignored`); return false; }
-    relay = r;
+    if (r.lines < 100) { say('warn', `relay list from ${from} too short, ignored`); return false; }
+    relay = { v4: r.v4, v6: r.v6 };
     say('info', `${r.v4.length} IPv4 + ${r.v6.length} IPv6 iCloud Private Relay ranges allowed (${from})`);
     return true;
   }
@@ -156,7 +183,9 @@ function createDatacenterCheck({ dir, mode = process.env.TACILYTICS_DATACENTER, 
       const text = (await Promise.all(DEFAULT_URLS.map(get))).join('\n');
       if (use(text, 'download')) writeCache(cache, text); else ok = false;
     } catch (e) { ok = false; say('warn', 'refresh failed (' + e.message + ')' + (loaded ? ', keeping the last list' : ', filter stays off until a list loads')); }
-    try { const t = await get(RELAY_URL); if (useRelay(t, 'download')) writeCache(relayCache, t); } catch (e) { say('warn', 'relay list refresh failed (' + e.message + ')'); }
+    try { const t = await get(RELAY_URL); if (useRelay(t, 'download')) writeCache(relayCache, t); else ok = false; } catch (e) { ok = false; say('warn', 'relay list refresh failed (' + e.message + ')'); }
+    // without the relay allowlist the filter is off, so a missing relay list is a failure too
+    if (!relay.v4.length && !relay.v6.length) ok = false;
     // retry with backoff while something failed, otherwise once a day
     if (ok) { retryMs = 5 * 60000; schedule(24 * 3600 * 1000); } else { schedule(retryMs); retryMs = Math.min(retryMs * 4, 6 * 3600 * 1000); }
   }
@@ -165,23 +194,26 @@ function createDatacenterCheck({ dir, mode = process.env.TACILYTICS_DATACENTER, 
     if (relayFile) { try { useRelay(fs.readFileSync(relayFile, 'utf8'), 'file'); } catch (e) { say('warn', 'relay file: ' + e.message); } }
     if (files) {
       // fixed local list (offline installs, tests): no download
+      if (!relayFile) say('warn', 'TACILYTICS_DATACENTER_FILE without TACILYTICS_RELAY_FILE: iCloud Private Relay visitors inside the list will be dropped');
       try { use(String(files).split(',').map((f) => fs.readFileSync(f.trim(), 'utf8')).join('\n'), 'file'); } catch (e) { say('warn', 'list file: ' + e.message); }
       return;
     }
     let fresh = false;
-    if (relayCache && fs.existsSync(relayCache)) { try { useRelay(fs.readFileSync(relayCache, 'utf8'), 'cache'); } catch {} }
+    let relayOk = false;
+    if (relayCache && fs.existsSync(relayCache)) { try { relayOk = useRelay(fs.readFileSync(relayCache, 'utf8'), 'cache'); } catch {} }
     if (cache && fs.existsSync(cache)) {
       try {
-        const age = Date.now() - fs.statSync(cache).mtimeMs;
-        if (use(fs.readFileSync(cache, 'utf8'), 'cache')) { loadedAt = Date.now() - age; fresh = age < 24 * 3600 * 1000; }
+        // clamp: a cache file with a future mtime must not give a negative age (timer overflow)
+        const age = Math.max(0, Date.now() - fs.statSync(cache).mtimeMs);
+        if (use(fs.readFileSync(cache, 'utf8'), 'cache')) { loadedAt = Date.now() - age; fresh = relayOk && age < 24 * 3600 * 1000; }
         if (age > 7 * 24 * 3600 * 1000) say('warn', `cached list is ${Math.round(age / 86400000)} days old`);
       } catch {}
     }
-    if (fresh) schedule(24 * 3600 * 1000 - (Date.now() - loadedAt)); else refresh();
+    if (fresh) schedule(Math.max(1000, 24 * 3600 * 1000 - (Date.now() - loadedAt))); else refresh();
   }
   function isDatacenter(ip) {
     if (!loaded) return false;
-    let s = String(ip || '').split('%')[0];
+    let s = String(ip || '').split('%')[0].toLowerCase();
     if (s.startsWith('::ffff:') && net.isIPv4(s.slice(7))) s = s.slice(7);
     if (!net.isIP(s)) return false;
     // without Apple's relay allowlist the datacenter list would drop iCloud Private Relay users
@@ -190,7 +222,9 @@ function createDatacenterCheck({ dir, mode = process.env.TACILYTICS_DATACENTER, 
     if (lookup(relay, s)) return false; // iCloud Private Relay = a real person
     return lookup(list, s);
   }
-  return { start, refresh, isDatacenter, get loaded() { return loaded; }, get loadedAt() { return loadedAt; } };
+  // active = the filter really drops something right now (list loaded and, unless a fixed file is used, the relay allowlist too)
+  const active = () => !off && loaded && (!!files || relay.v4.length > 0 || relay.v6.length > 0);
+  return { start, refresh, isDatacenter, get loaded() { return loaded; }, get loadedAt() { return loadedAt; }, get active() { return active(); }, get off() { return off; } };
 }
 
-module.exports = { createDatacenterCheck, _test: { parseList, parseRelay, validate, inRanges, v4ToInt, v6ToBig } };
+module.exports = { createDatacenterCheck, _test: { parseList, parseRelay, validate, inRanges, v4ToInt, v6ToBig, v6Share, MIN_BITS_V6 } };

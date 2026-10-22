@@ -1,6 +1,6 @@
 {
   "name": "tacilytics",
-  "version": "2.4.1",
+  "version": "2.5.0",
   "description": "Privacy-first, cookieless analytics for websites and apps. Self-hosted: one Node process, one SQLite file.",
   "main": "server.js",
   "type": "commonjs",

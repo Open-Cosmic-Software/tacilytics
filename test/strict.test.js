@@ -103,7 +103,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'na-strict-'));
 const DB_PATH = path.join(dir, 'analytics.db');
 const PORT = 41000 + Math.floor(Math.random() * 1000);
 const ENV = {
-  ...process.env, DB_PATH, PORT: String(PORT),
+  ...process.env, TACILYTICS_DATACENTER: 'off', DB_PATH, PORT: String(PORT),
   DIGEST_WEBHOOK_URL: 'http://127.0.0.1:9/', DATA_RETENTION_DAYS: '0',
   INGEST_SALT: 'strict-test-salt', API_KEY: 'strict-test-key', SESSION_SECRET: 'strict-test-session',
   WEB_PASSWORD: 'strict-' + Math.random().toString(36).slice(2),

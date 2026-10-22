@@ -90,7 +90,7 @@ const PORT = 41000 + Math.floor(Math.random() * 1000);
 const ORIGIN = `http://localhost:${PORT}`;
 const WEB_PASSWORD = 'legacy-' + crypto.randomBytes(6).toString('hex');
 const ENV = {
-  ...process.env, DB_PATH, PORT: String(PORT), DIGEST_WEBHOOK_URL: 'http://127.0.0.1:9/', DATA_RETENTION_DAYS: '0',
+  ...process.env, TACILYTICS_DATACENTER: 'off', DB_PATH, PORT: String(PORT), DIGEST_WEBHOOK_URL: 'http://127.0.0.1:9/', DATA_RETENTION_DAYS: '0',
   INGEST_SALT: 'auth-test-salt', API_KEY: 'auth-test-key', SESSION_SECRET: 'auth-test-session', WEB_PASSWORD,
   TACILYTICS_ORIGIN: ORIGIN,
 };

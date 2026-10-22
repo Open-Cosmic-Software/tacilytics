@@ -27,7 +27,7 @@ test('existing sites default to UTC after the upgrade (Tyto 5)', async (t) => {
   t.after(() => execFileSync('git', ['worktree', 'remove', '--force', wt], { cwd: ROOT, stdio: 'ignore' }));
   fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(wt, 'node_modules'));
   assert.ok(!/timezone/.test(fs.readFileSync(path.join(wt, 'server.js'), 'utf8').match(/CREATE TABLE IF NOT EXISTS sites \([^;]*/)[0]), 'v2.1.0 has no timezone column');
-  const env = { ...process.env, DB_PATH, PORT: String(46000 + Math.floor(Math.random() * 1000)), DIGEST_WEBHOOK_URL: 'off', DATA_RETENTION_DAYS: '0', INGEST_SALT: 's', SESSION_SECRET: 'x', TACILYTICS_ALERT_TICK: 'off' };
+  const env = { ...process.env, TACILYTICS_DATACENTER: 'off', DB_PATH, PORT: String(46000 + Math.floor(Math.random() * 1000)), DIGEST_WEBHOOK_URL: 'off', DATA_RETENTION_DAYS: '0', INGEST_SALT: 's', SESSION_SECRET: 'x', TACILYTICS_ALERT_TICK: 'off' };
   const p0 = await boot(wt, env);
   const db0 = new Database(DB_PATH);
   db0.prepare('INSERT INTO sites (domain, created) VALUES (?, ?)').run('old.test', Date.now());

@@ -12,7 +12,7 @@ const ROOT = path.join(__dirname, '..');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'taci-ten-'));
 const PORT = 45000 + Math.floor(Math.random() * 1000);
 const KEY = 'k-tenancy-test';
-const ENV = { ...process.env, DB_PATH: path.join(dir, 'a.db'), PORT: String(PORT), DIGEST_WEBHOOK_URL: 'https://discord.com/api/webhooks/1/operator',
+const ENV = { ...process.env, TACILYTICS_DATACENTER: 'off', DB_PATH: path.join(dir, 'a.db'), PORT: String(PORT), DIGEST_WEBHOOK_URL: 'https://discord.com/api/webhooks/1/operator',
   DATA_RETENTION_DAYS: '0', INGEST_SALT: 's', API_KEY: KEY, SESSION_SECRET: 'x', WEB_PASSWORD: 'pass-tenancy-test',
   TRUST_PROXY: '0', TACILYTICS_ALERT_TICK: 'off' };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

@@ -12,7 +12,7 @@ const ROOT = path.join(__dirname, '..');
 const VERSION = require('../package.json').version;
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'taci-ver-'));
 const PORT = 45000 + Math.floor(Math.random() * 1000);
-const ENV = { ...process.env, DB_PATH: path.join(dir, 'a.db'), PORT: String(PORT), DIGEST_WEBHOOK_URL: 'off', DATA_RETENTION_DAYS: '0',
+const ENV = { ...process.env, TACILYTICS_DATACENTER: 'off', DB_PATH: path.join(dir, 'a.db'), PORT: String(PORT), DIGEST_WEBHOOK_URL: 'off', DATA_RETENTION_DAYS: '0',
   INGEST_SALT: 's', API_KEY: 'k-ver-test', SESSION_SECRET: 'sess-ver-test', WEB_PASSWORD: 'pass-ver-test', TRUST_PROXY: '0', TACILYTICS_ALERT_TICK: 'off' };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const U = (p) => `http://127.0.0.1:${PORT}${p}`;

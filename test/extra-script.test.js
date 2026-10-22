@@ -13,7 +13,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function pageWith(extra) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'taci-xs-'));
   const PORT = 48500 + Math.floor(Math.random() * 400);
-  const env = { ...process.env, DB_PATH: path.join(dir, 'a.db'), PORT: String(PORT), DIGEST_WEBHOOK_URL: 'off', DATA_RETENTION_DAYS: '0',
+  const env = { ...process.env, TACILYTICS_DATACENTER: 'off', DB_PATH: path.join(dir, 'a.db'), PORT: String(PORT), DIGEST_WEBHOOK_URL: 'off', DATA_RETENTION_DAYS: '0',
     INGEST_SALT: 's', SESSION_SECRET: '***', TACILYTICS_ALERT_TICK: 'off', TRUST_PROXY: '0' };
   if (extra !== undefined) env.DASHBOARD_EXTRA_SCRIPT = extra; else delete env.DASHBOARD_EXTRA_SCRIPT;
   const p = spawn(process.execPath, [path.join(ROOT, 'server.js')], { cwd: ROOT, env, stdio: 'ignore' });

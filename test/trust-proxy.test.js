@@ -15,7 +15,7 @@ const WARN = /without X-Forwarded-For/g;
 async function run(trust, requests) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'taci-tp-'));
   const PORT = 40000 + Math.floor(Math.random() * 1000);
-  const env = { PATH: process.env.PATH, DB_PATH: path.join(dir, 'a.db'), PORT: String(PORT), WEB_PASSWORD: 'tp-test-' + Date.now(), TRUST_PROXY: String(trust) };
+  const env = { PATH: process.env.PATH, TACILYTICS_DATACENTER: 'off', DB_PATH: path.join(dir, 'a.db'), PORT: String(PORT), WEB_PASSWORD: 'tp-test-' + Date.now(), TRUST_PROXY: String(trust) };
   const p = spawn(process.execPath, [path.join(ROOT, 'server.js')], { cwd: ROOT, env, stdio: ['ignore', 'ignore', 'pipe'] });
   let err = ''; p.stderr.on('data', (d) => (err += d));
   try {

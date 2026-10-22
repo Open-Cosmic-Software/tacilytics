@@ -43,7 +43,7 @@ const smtp = net.createServer((sock) => {
 });
 
 const ENV = {
-  ...process.env, DB_PATH, PORT: String(PORT), DIGEST_WEBHOOK_URL: 'off', DATA_RETENTION_DAYS: '0',
+  ...process.env, TACILYTICS_DATACENTER: 'off', DB_PATH, PORT: String(PORT), DIGEST_WEBHOOK_URL: 'off', DATA_RETENTION_DAYS: '0',
   INGEST_SALT: 's', API_KEY: KEY, SESSION_SECRET: 'x', WEB_PASSWORD: 'report-pass-1234', TRUST_PROXY: '0',
   TACILYTICS_TEST_HOOKS: '1', TACILYTICS_ALERT_TICK: 'off', TACILYTICS_ORIGIN: 'https://analytics.example.com',
   SMTP_URL: `smtp://127.0.0.1:${SMTP_PORT}?ignoreTLS=true`, REPORT_FROM: 'Tacilytics <reports@example.com>', REPORT_HOUR_UTC: '6',

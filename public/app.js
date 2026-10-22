@@ -145,13 +145,16 @@
   function showTz() { var s = currentSite(); $('tzName').textContent = s ? String(s.timezone || 'UTC').replace(/_/g, ' ') : 'UTC'; $('tzBtn').classList.toggle('hide', !s); }
   $('tzBtn').onclick = function () {
     var s = currentSite(); if (!s) return;
-    $('tzSite').textContent = s.domain; $('tzErr').textContent = ''; fillTz($('tzSelect'), s.timezone || 'UTC'); $('dcFilter').checked = s.dc_filter !== 0;
+    $('tzSite').textContent = s.domain; $('tzErr').textContent = ''; fillTz($('tzSelect'), s.timezone || 'UTC'); $('dcFilter').checked = s.dc_filter !== 0; $('dcFilter').disabled = s.dc_active === false;
+    $('dcFilter').parentNode.style.opacity = s.dc_active === false ? '0.55' : '';
+    $('dcInfo').textContent = s.dc_active === false ? 'The filter is not running on this server right now (switched off, or the network lists have not loaded yet). Every visit is counted.'
+      : s.dc_dropped_today ? s.dc_dropped_today + ' of ' + s.dc_seen_today + ' hits from cloud networks ignored today (UTC).' : '';
     $('tzModal').classList.remove('hide'); $('tzSelect').focus();
   };
   $('cancelTz').onclick = function () { closeModal($('tzModal'), { force: true }); };
   $('saveTz').onclick = function () {
     var s = currentSite(); if (!s) return;
-    api('/api/sites/' + s.id, { method: 'PATCH', body: JSON.stringify({ timezone: $('tzSelect').value, dcFilter: $('dcFilter').checked }) }).then(function (r) {
+    api('/api/sites/' + s.id, { method: 'PATCH', body: JSON.stringify($('dcFilter').disabled ? { timezone: $('tzSelect').value } : { timezone: $('tzSelect').value, dcFilter: $('dcFilter').checked }) }).then(function (r) {
       if (r.error) { $('tzErr').textContent = r.error; return; }
       closeModal($('tzModal'), { force: true });
       loadSites().then(load);

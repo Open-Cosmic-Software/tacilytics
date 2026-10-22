@@ -9,7 +9,7 @@
 <meta name="theme-color" content="#071114">
 <link rel="preload" href="/assets/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <script src="/theme.js?v=1"></script>
-<link rel="stylesheet" href="/style.css?v=2.5.0.5">
+<link rel="stylesheet" href="/style.css?v=2026102201">
 </head>
 <body>
 
@@ -221,13 +221,14 @@
   <div class="modal">
     <button type="button" class="modal-x" data-close aria-label="Close" title="Close"><svg class="ico ui" aria-hidden="true"><use href="/assets/icons.svg?v=2#i-x"></use></svg></button>
     <span class="logo em"><svg class="ico big" aria-hidden="true"><use href="/assets/icons.svg?v=2#i-timer"></use></svg></span>
-    <h2>Time zone</h2>
+    <h2>Site settings</h2>
     <p><span>Days, hours, the weekly report and alerts follow this time zone for</span> <b id="tzSite"></b></p>
     <p>Stored data does not change — switching back and forth is safe.</p>
     <p class="muted small">Unique visitors per day are an approximation outside UTC: the anonymous visitor ID changes at midnight UTC.</p>
     <div id="tzErr" class="err"></div>
     <select id="tzSelect" class="tz-select"></select>
     <label class="check" style="display:flex;gap:8px;align-items:flex-start;margin:14px 0 4px;text-align:left"><input type="checkbox" id="dcFilter"> <span>Ignore visits from cloud and hosting networks (scrapers). The IP is checked on arrival and never stored. iCloud Private Relay is let through; commercial VPNs and cloud desktops are not counted.</span></label>
+    <p id="dcInfo" class="muted small" style="margin:0 0 10px;text-align:left"></p>
     <button class="btn" id="saveTz">Save</button>
     <button class="btn ghost" id="cancelTz" style="margin-top:10px">Cancel</button>
   </div>
@@ -390,8 +391,8 @@
 </div>
 
 <div class="tip" id="tip"></div>
-<script src="/i18n.js?v=2.2.5"></script>
+<script src="/i18n.js?v=2.2.6"></script>
 <script src="/account.js?v=2.5.9"></script>
-<script src="/app.js?v=2.7.2"></script>
+<script src="/app.js?v=2.7.3"></script>
 </body>
 </html>

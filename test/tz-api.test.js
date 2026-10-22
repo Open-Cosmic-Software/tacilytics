@@ -17,7 +17,7 @@ test('time zones: API', async (t) => {
   const DB_PATH = path.join(dir, 'analytics.db');
   const PORT = 45000 + Math.floor(Math.random() * 1000);
   const KEY = 'tz-' + crypto.randomBytes(4).toString('hex');
-  const ENV = { ...process.env, DB_PATH, PORT: String(PORT), DIGEST_WEBHOOK_URL: 'off', DATA_RETENTION_DAYS: '0', INGEST_SALT: 's', API_KEY: KEY, SESSION_SECRET: 'x', WEB_PASSWORD: 'tz-pass-12345', TRUST_PROXY: '0', TACILYTICS_ALERT_TICK: 'off', TACILYTICS_TEST_HOOKS: '1' };
+  const ENV = { ...process.env, TACILYTICS_DATACENTER: 'off', DB_PATH, PORT: String(PORT), DIGEST_WEBHOOK_URL: 'off', DATA_RETENTION_DAYS: '0', INGEST_SALT: 's', API_KEY: KEY, SESSION_SECRET: 'x', WEB_PASSWORD: 'tz-pass-12345', TRUST_PROXY: '0', TACILYTICS_ALERT_TICK: 'off', TACILYTICS_TEST_HOOKS: '1' };
   const proc = spawn(process.execPath, [path.join(ROOT, 'server.js')], { cwd: ROOT, env: ENV, stdio: ['ignore', 'ignore', 'pipe'] });
   t.after(async () => { proc.kill('SIGTERM'); await new Promise((r) => proc.on('exit', r)); fs.rmSync(dir, { recursive: true, force: true }); });
   for (let i = 0; i < 100; i++) { try { await fetch(`http://127.0.0.1:${PORT}/nyx.js`); break; } catch { await new Promise((r) => setTimeout(r, 100)); } }
@@ -90,7 +90,7 @@ test('time zones: imported history ends before the first LOCAL day with own data
   const DB_PATH = path.join(dir, 'analytics.db');
   const PORT = 46000 + Math.floor(Math.random() * 1000);
   const KEY = 'tzi-' + crypto.randomBytes(4).toString('hex');
-  const ENV = { ...process.env, DB_PATH, PORT: String(PORT), DIGEST_WEBHOOK_URL: 'off', DATA_RETENTION_DAYS: '0', INGEST_SALT: 's', API_KEY: KEY, SESSION_SECRET: 'x', WEB_PASSWORD: 'tz-pass-12345', TRUST_PROXY: '0', TACILYTICS_ALERT_TICK: 'off' };
+  const ENV = { ...process.env, TACILYTICS_DATACENTER: 'off', DB_PATH, PORT: String(PORT), DIGEST_WEBHOOK_URL: 'off', DATA_RETENTION_DAYS: '0', INGEST_SALT: 's', API_KEY: KEY, SESSION_SECRET: 'x', WEB_PASSWORD: 'tz-pass-12345', TRUST_PROXY: '0', TACILYTICS_ALERT_TICK: 'off' };
   const proc = spawn(process.execPath, [path.join(ROOT, 'server.js')], { cwd: ROOT, env: ENV, stdio: ['ignore', 'ignore', 'pipe'] });
   t.after(async () => { proc.kill('SIGTERM'); await new Promise((r) => proc.on('exit', r)); fs.rmSync(dir, { recursive: true, force: true }); });
   for (let i = 0; i < 100; i++) { try { await fetch(`http://127.0.0.1:${PORT}/nyx.js`); break; } catch { await new Promise((r) => setTimeout(r, 100)); } }

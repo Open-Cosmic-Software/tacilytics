@@ -20,7 +20,7 @@ const KEY = 'alerts-test-key-' + crypto.randomBytes(4).toString('hex');
 const ENV = {
   // DIGEST_WEBHOOK_URL: 'off' instead of '' — the .env loader treats '' as unset and would pull the
   // live webhook from .env. The server reads 'off' as "no default webhook".
-  ...process.env, DB_PATH, PORT: String(PORT), DIGEST_WEBHOOK_URL: 'off', DATA_RETENTION_DAYS: '0',
+  ...process.env, TACILYTICS_DATACENTER: 'off', DB_PATH, PORT: String(PORT), DIGEST_WEBHOOK_URL: 'off', DATA_RETENTION_DAYS: '0',
   INGEST_SALT: 'alerts-salt', API_KEY: KEY, SESSION_SECRET: 'x', WEB_PASSWORD: 'alerts-pass-1234', TRUST_PROXY: '0',
   TACILYTICS_TEST_HOOKS: '1', TACILYTICS_TEST_WEBHOOK_BASE: `http://127.0.0.1:${HOOK_PORT}/`, TACILYTICS_ALERT_TICK: 'off',
 };

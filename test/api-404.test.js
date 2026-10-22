@@ -13,7 +13,7 @@ const vm = require('vm');
 const ROOT = path.join(__dirname, '..');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'taci-404-'));
 const PORT = 44000 + Math.floor(Math.random() * 1000);
-const ENV = { ...process.env, DB_PATH: path.join(dir, 'a.db'), PORT: String(PORT), DIGEST_WEBHOOK_URL: 'off', DATA_RETENTION_DAYS: '0',
+const ENV = { ...process.env, TACILYTICS_DATACENTER: 'off', DB_PATH: path.join(dir, 'a.db'), PORT: String(PORT), DIGEST_WEBHOOK_URL: 'off', DATA_RETENTION_DAYS: '0',
   INGEST_SALT: 's', API_KEY: 'k-404-test', SESSION_SECRET: 'x', WEB_PASSWORD: 'pass-404-test', TRUST_PROXY: '0', TACILYTICS_ALERT_TICK: 'off' };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 

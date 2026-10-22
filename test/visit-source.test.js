@@ -16,7 +16,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'taci-vsrc-'));
 const DB_PATH = path.join(dir, 'a.db');
 const PORT = 47000 + Math.floor(Math.random() * 1000);
 const KEY = 'k-visit-source-test';
-const ENV = { ...process.env, DB_PATH, PORT: String(PORT), DIGEST_WEBHOOK_URL: 'off',
+const ENV = { ...process.env, TACILYTICS_DATACENTER: 'off', DB_PATH, PORT: String(PORT), DIGEST_WEBHOOK_URL: 'off',
   DATA_RETENTION_DAYS: '0', INGEST_SALT: 's', API_KEY: KEY, SESSION_SECRET: 'x', WEB_PASSWORD: 'pass-visit-source',
   TRUST_PROXY: '0', TACILYTICS_ALERT_TICK: 'off' };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -91,6 +91,17 @@ test('visit source', async (t) => {
     const r = db.prepare("SELECT source, utm_medium, utm_campaign FROM events WHERE path = '/u-next'").get();
     db.close();
     assert.deepStrictEqual({ ...r }, { source: 'newsletter', utm_medium: 'email', utm_campaign: 'herbst' });
+  });
+
+  await t.test('internal link with only utm_medium keeps the visit source (N5)', async () => {
+    await collect(21, { p: '/m-land', r: 'https://www.google.com/' });
+    await collect(21, { p: '/m-banner', r: 'https://shop.test/m-land', um: 'banner' });
+    const db = new Database(DB_PATH, { readonly: true });
+    const r = db.prepare("SELECT source, utm_medium FROM events WHERE path = '/m-banner'").get();
+    db.close();
+    assert.deepStrictEqual({ ...r }, { source: 'google.com', utm_medium: 'banner' });
+    await collect(22, { p: '/m-cold', um: 'banner' });
+    assert.strictEqual(src('/m-cold'), 'Direct', 'without an earlier page view it stays Direct');
   });
 
   await t.test('a return from PayPal keeps the real source of the visit', async () => {

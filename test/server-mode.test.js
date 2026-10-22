@@ -15,7 +15,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'taci-srv-'));
 const DB_PATH = path.join(dir, 'a.db');
 const PORT = 46000 + Math.floor(Math.random() * 1000);
 const KEY = 'k-server-mode-test';
-const ENV = { ...process.env, DB_PATH, PORT: String(PORT), DIGEST_WEBHOOK_URL: 'off',
+const ENV = { ...process.env, TACILYTICS_DATACENTER: 'off', DB_PATH, PORT: String(PORT), DIGEST_WEBHOOK_URL: 'off',
   DATA_RETENTION_DAYS: '0', INGEST_SALT: 's', API_KEY: KEY, SESSION_SECRET: 'x', WEB_PASSWORD: 'pass-server-mode',
   TRUST_PROXY: '0', TACILYTICS_ALERT_TICK: 'off' };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

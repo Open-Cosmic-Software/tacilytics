@@ -176,7 +176,13 @@ function visitSource(siteId, vh, day, ts, utm, referrer, domain, medium, campaig
       return prev ? { source: prev.source, medium: medium || prev.utm_medium, campaign: campaign || prev.utm_campaign } : { source: h, medium, campaign };
     }
   }
-  if (medium || campaign) return { source: 'Direct', medium, campaign };
+  if (medium || campaign) {
+    // internal link with its own utm_medium / campaign but no source: keep the visit's source, use the own medium (like GA)
+    let own = false;
+    try { own = !!referrer && norm(new URL(referrer).hostname) === domain; } catch {}
+    const prev = own ? lastSource.get(siteId, vh, day, ts - VISIT_GAP) : null;
+    return { source: (prev && prev.source) || 'Direct', medium, campaign };
+  }
   const prev = lastSource.get(siteId, vh, day, ts - VISIT_GAP);
   return prev ? { source: prev.source || 'Direct', medium: prev.utm_medium, campaign: prev.utm_campaign } : { source: 'Direct', medium: null, campaign: null };
 }
@@ -291,12 +297,22 @@ dc.start();
 // would make EVERY hit look like a datacenter and vanish. Count per site and hour (numbers only, no
 // IPs) and warn loudly when most of a site's traffic is being dropped.
 const dcStats = new Map();
+// per UTC day, numbers only: shown in the dashboard ("N hits from cloud networks ignored today"), so a
+// Cloud customer who never sees the server log still notices a 100 % drop. Lost on restart, that is fine.
+const dcToday = new Map();
 function dcDropped(site, dropped) {
-  const hour = Math.floor(Date.now() / 3600000);
+  const now = Date.now();
+  const hour = Math.floor(now / 3600000);
   let st = dcStats.get(site.id);
   if (!st || st.hour !== hour) { st = { hour, total: 0, dropped: 0, warned: false }; dcStats.set(site.id, st); }
   st.total++; if (dropped) st.dropped++;
-  if (!st.warned && st.total >= 20 && st.dropped / st.total > 0.5) {
+  const day = dayStr(now);
+  let d = dcToday.get(site.id);
+  if (!d || d.day !== day) { d = { day, total: 0, dropped: 0 }; dcToday.set(site.id, d); }
+  d.total++; if (dropped) d.dropped++;
+  // big sites: most of the hour dropped. Small sites (a few hits an hour) never reach 20, so also warn
+  // when every one of at least 5 hits was dropped.
+  if (!st.warned && ((st.total >= 20 && st.dropped / st.total > 0.5) || (st.total >= 5 && st.dropped === st.total))) {
     st.warned = true;
     console.warn(`⚠️  datacenter filter: ${st.dropped} of ${st.total} hits for ${site.domain} this hour came from cloud / hosting networks and were not counted. If that is not a bot wave, check TRUST_PROXY (and the ip you send in server mode), or switch the filter off for this site.`);
   }
@@ -398,7 +414,6 @@ function collect(req, res) {
   try { pth = decodeURI(pth); } catch {}
   if (pth.length > 1) pth = pth.replace(/\/+$/, '') || '/';
   const ip = clientIp(req);
-  if (site.dc_filter && dcDropped(site, dc.isDatacenter(ip))) return res.status(204).end(); // cloud / hosting network: not a person
   // apps may send `sid`: a random id the SDK draws per app launch and never persists (no device id).
   // Mobile carriers put many phones behind one IP, so IP+UA alone would merge app users.
   const sid = platform ? String(b.sid || '').slice(0, 64) : '';
@@ -418,6 +433,9 @@ function collect(req, res) {
     if (dur > 0 || sc != null) updDur.run({ site_id: site.id, vh, path: pth, dur, scroll: sc, since: ts - 6 * 3600000 });
     return res.status(204).end();
   }
+  // after the bot / DNT / internal / engagement exits: only hits that would really be counted enter the statistics.
+  // (Engagement beacons from a datacenter IP only update a row that never existed, so they need no check.)
+  if (site.dc_filter && dcDropped(site, dc.isDatacenter(ip))) return res.status(204).end(); // cloud / hosting network: not a person
 
   // referrer → source host
   let referrer = String(b.r || b.referrer || '').slice(0, 512);
@@ -470,7 +488,14 @@ const NO_SITE = { error: 'You have no access to this site' };
 function newToken() { return crypto.randomBytes(24).toString('hex'); }
 
 // ── sites management ─────────────────────────────────────────────────────────
-const sitesListHandler = (req, res) => res.json(allSites.all().filter((st) => siteAllowed(req, st.id)));
+// dc_active: the datacenter filter really runs on this server (list + relay allowlist loaded, not switched off).
+// dc_dropped_today / dc_seen_today: hits checked and ignored today (UTC), numbers only.
+function withDcInfo(st) {
+  const d = dcToday.get(st.id);
+  const fresh = d && d.day === dayStr(Date.now());
+  return { ...st, dc_active: dc.active, dc_dropped_today: fresh ? d.dropped : 0, dc_seen_today: fresh ? d.total : 0 };
+}
+const sitesListHandler = (req, res) => res.json(allSites.all().filter((st) => siteAllowed(req, st.id)).map(withDcInfo));
 const sitesCreateHandler = (req, res) => {
   // a site-limited account (a hosting customer) never creates sites itself: the operator does, because sites are what
   // is billed and paused. Otherwise a paused customer could add a fresh, unpaused site and move the snippet (Kiro, 2.3.0).
@@ -516,6 +541,8 @@ app.patch('/api/sites/:id', adminOnly, (req, res) => {
   const setTz = b.timezone !== undefined || (b.paused === undefined && b.dcFilter === undefined);
   const timezone = setTz ? TZ.validTz(String(b.timezone || '')) : null;
   if (setTz && !timezone) return res.status(400).json({ error: 'Unknown time zone' });
+  // all writes in one transaction: either every change lands or none
+  db.transaction(() => {
   if (b.paused !== undefined) {
     const paused = b.paused ? 1 : 0;
     db.prepare('UPDATE sites SET paused = ? WHERE id = ?').run(paused, id);
@@ -531,7 +558,8 @@ app.patch('/api/sites/:id', adminOnly, (req, res) => {
     db.prepare('UPDATE sites SET timezone = ? WHERE id = ?').run(timezone, id);
     if (timezone !== site.timezone) audit(res, 'site.timezone', site.domain + ': ' + site.timezone + ' → ' + timezone);
   }
-  res.json(db.prepare('SELECT * FROM sites WHERE id = ?').get(id));
+  })();
+  res.json(withDcInfo(db.prepare('SELECT * FROM sites WHERE id = ?').get(id)));
 });
 app.delete('/api/sites/:id', adminOnly, (req, res) => {
   const id = Number(req.params.id);
@@ -597,13 +625,15 @@ app.post('/api/v1/hit', auth, (req, res) => {
   const ip = String(b.ip || '').trim();
   // without the visitor IP every visitor would fall onto one hash: refuse instead of counting wrong
   if (!net.isIP(ip)) return res.status(400).json({ error: 'ip (the visitor IP) is required for server mode' });
-  if (site.dc_filter && dcDropped(site, dc.isDatacenter(ip))) return res.status(204).end(); // cloud / hosting network: not a person
   // prefetch / prerender requests are not visits (Sec-Purpose / Purpose header of the visitor request)
   if (PREFETCH_RE.test(String(b.purpose || ''))) return res.status(204).end();
   const rawUa = String(b.ua || '').slice(0, 512);
   const ua = parseUA(rawUa);
   if (!ua) return res.status(204).end(); // bot, crawler, monitor or no user agent
   if (b.dnt === true || b.dnt === '1' || b.gpc === true || b.gpc === '1') return res.status(204).end(); // forwarded DNT / GPC (opt-in on the sending side)
+  // after prefetch / bot / DNT: server mode forwards crawlers too (Googlebot sits in cloud ranges), they must not
+  // inflate the drop statistics and trigger false TRUST_PROXY warnings
+  if (site.dc_filter && dcDropped(site, dc.isDatacenter(ip))) return res.status(204).end(); // cloud / hosting network: not a person
 
   const ts = Date.now();
   const day = dayStr(ts);

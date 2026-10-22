@@ -26,7 +26,7 @@ const DB_PATH = path.join(dir, 'analytics.db');
 const SALT = path.join(dir, '.day-salt');
 const PORT = 39000 + Math.floor(Math.random() * 1000);
 const ENV = {
-  ...process.env,
+  ...process.env, TACILYTICS_DATACENTER: 'off',
   DB_PATH, PORT: String(PORT),
   DIGEST_WEBHOOK_URL: 'http://127.0.0.1:9/', DATA_RETENTION_DAYS: '0',
   INGEST_SALT: 'e2e-test-salt', API_KEY: 'e2e-test-key', SESSION_SECRET: 'e2e-test-session',
