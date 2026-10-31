@@ -585,11 +585,11 @@ app.get('/api/v1', (_req, res) => res.json({
     'GET /api/v1/sites': 'list tracked sites',
     'POST /api/v1/sites': 'add a site { domain }',
     'GET /api/v1/stats?site=&period=': 'aggregated stats (period: today|7d|30d|90d|12mo, or from=YYYY-MM-DD&to=YYYY-MM-DD)',
-    'GET /api/v1/realtime?site=': 'online count, last-30-min pulse + recent events',
+    'GET /api/v1/realtime?site=': 'online count, last-30-min pulse + recent events, online per platform; takes the same segment filters as /stats (e.g. platform=app)',
     'GET /api/v1/usage?month=YYYY-MM': 'page views per site in a calendar month (UTC), owner / server key only',
     'POST /api/v1/hit': 'server mode: report a page view from your web server { domain, path, ip, ua, referrer?, lang?, purpose?, name? } (server-mode key)',
   },
-  filters: 'add any of country,source,page,browser,os,device,lang,medium,campaign,goal to /stats to segment',
+  filters: 'add any of country,source,page,browser,os,device,lang,medium,campaign,platform,version,goal to /stats to segment (platform: web | app | android | ios | macos | windows | linux)',
 }));
 app.get('/api/v1/sites', auth, sitesListHandler);
 // page views per site in one calendar month (UTC), for hosting volume checks. Operator only:
@@ -699,7 +699,10 @@ function buildFilters(query) {
   const clauses = [], params = [];
   for (const key of Object.keys(FILTER_COLS)) {
     const v = query[key];
-    if (v != null && v !== '') { clauses.push(`${FILTER_COLS[key]} = ?`); params.push(String(v).slice(0, 200)); }
+    if (v == null || v === '') continue;
+    // platform=app (2.6): every native app together (Android + iOS + desktop apps), web excluded
+    if (key === 'platform' && String(v).toLowerCase() === 'app') { clauses.push('platform IS NOT NULL'); continue; }
+    clauses.push(`${FILTER_COLS[key]} = ?`); params.push(String(v).slice(0, 200));
   }
   const goal = query.goal != null && query.goal !== '' ? String(query.goal).slice(0, 80) : null;
   return { clauses, params, goal };
@@ -709,7 +712,8 @@ function buildFilters(query) {
 function eventPlatformFilter(query) {
   let f = '';
   const pf = String(query.platform || '').toLowerCase();
-  if (pf === 'web' || Object.prototype.hasOwnProperty.call(APP_PLATFORMS, pf)) f += ` AND ${PLATFORM_SQL} = '${pf}'`;
+  if (pf === 'app') f += ' AND platform IS NOT NULL';
+  else if (pf === 'web' || Object.prototype.hasOwnProperty.call(APP_PLATFORMS, pf)) f += ` AND ${PLATFORM_SQL} = '${pf}'`;
   const v = String(query.version || '');
   if (/^[A-Za-z0-9._+-]{1,32}$/.test(v)) f += ` AND app_version = '${v}'`;
   return f;
@@ -980,15 +984,27 @@ function statsHandler(req, res) {
     os: topBy('os', 6),
     devices: topBy('device', 4),
     platforms: topBy(PLATFORM_SQL, 6),
+    // all native apps together (one visitor on Android + iOS counts once); null when no app reports
+    appVisitors: db.prepare(`SELECT COUNT(DISTINCT vh) v FROM events WHERE ${where} AND platform IS NOT NULL`).get(...args).v || null,
     appVersions: topBy('app_version', 6),
     languages: topBy('lang', 6),
     goals,
     properties,
-    realtime: db.prepare('SELECT COUNT(DISTINCT vh) v FROM events WHERE site_id = ? AND name IS NULL AND ts >= ?').get(sid, Date.now() - 5 * 60000).v,
+    realtime: liveFiltered(sid, req.query, Date.now() - 5 * 60000).online,
   });
 }
 app.get('/api/stats', authOrShare, statsHandler);
 app.get('/api/v1/stats', authOrShare, statsHandler);
+
+// Live numbers follow the dashboard's segment filters (2.6: "live only for the app"). Goal filters
+// are left out on purpose: "visitors who converted in the period" makes no sense for the last minutes.
+function liveFiltered(sid, query, onlineSince) {
+  const { clauses, params } = buildFilters(query);
+  const where = 'site_id = ?' + (clauses.length ? ' AND ' + clauses.join(' AND ') : '');
+  const args = [sid, ...params];
+  const online = db.prepare(`SELECT COUNT(DISTINCT vh) v FROM events WHERE ${where} AND name IS NULL AND ts >= ?`).get(...args, onlineSince).v;
+  return { online, where, args };
+}
 
 // ── realtime: live visitors + per-minute pulse + recent event feed (last 30 min) ──
 function realtimeHandler(req, res) {
@@ -996,13 +1012,16 @@ function realtimeHandler(req, res) {
   if (!site) return res.status(404).json({ error: 'Unknown site' });
   if (!siteOk(req, site)) return res.status(403).json(NO_SITE);
   const sid = site.id, now = Date.now(), since = now - 30 * 60000;
-  const online = db.prepare('SELECT COUNT(DISTINCT vh) v FROM events WHERE site_id = ? AND name IS NULL AND ts >= ?').get(sid, now - 5 * 60000).v;
-  const rows = db.prepare('SELECT CAST((ts/60000) AS INT) b, COUNT(*) pv, COUNT(DISTINCT vh) v FROM events WHERE site_id = ? AND name IS NULL AND ts >= ? GROUP BY b').all(sid, since);
+  const { online, where, args } = liveFiltered(sid, req.query, now - 5 * 60000);
+  const rows = db.prepare(`SELECT CAST((ts/60000) AS INT) b, COUNT(*) pv, COUNT(DISTINCT vh) v FROM events WHERE ${where} AND name IS NULL AND ts >= ? GROUP BY b`).all(...args, since);
   const map = new Map(rows.map((r) => [r.b, r]));
   const startB = Math.floor(since / 60000);
   const minutes = Array.from({ length: 30 }, (_, i) => { const r = map.get(startB + i + 1); return { visitors: r ? r.v : 0, pageviews: r ? r.pv : 0 }; });
-  const recent = db.prepare('SELECT ts, path, country, tz, browser, os, device, source, lang, name, platform FROM events WHERE site_id = ? AND ts >= ? ORDER BY id DESC LIMIT 60').all(sid, since);
-  res.json({ online, minutes, recent, now });
+  const recent = db.prepare(`SELECT ts, path, country, tz, browser, os, device, source, lang, name, platform FROM events WHERE ${where} AND ts >= ? ORDER BY id DESC LIMIT 60`).all(...args, since);
+  // who is online right now per platform — always unfiltered, so the split works as a switch
+  const platforms = db.prepare(`SELECT ${PLATFORM_SQL} AS name, COUNT(DISTINCT vh) AS visitors FROM events WHERE site_id = ? AND name IS NULL AND ts >= ? GROUP BY 1 ORDER BY visitors DESC`).all(sid, now - 5 * 60000);
+  const appOnline = db.prepare('SELECT COUNT(DISTINCT vh) v FROM events WHERE site_id = ? AND name IS NULL AND ts >= ? AND platform IS NOT NULL').get(sid, now - 5 * 60000).v;
+  res.json({ online, minutes, recent, platforms, appOnline, now });
 }
 app.get('/api/realtime', authOrShare, realtimeHandler);
 app.get('/api/v1/realtime', authOrShare, realtimeHandler);
