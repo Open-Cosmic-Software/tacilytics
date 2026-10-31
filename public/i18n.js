@@ -140,7 +140,7 @@
     'Stored data does not change — switching back and forth is safe.': 'Gespeicherte Daten ändern sich nicht, Hin- und Herwechseln ist gefahrlos.',
     'Unique visitors per day are an approximation outside UTC: the anonymous visitor ID changes at midnight UTC.': 'Eindeutige Besucher pro Tag sind außerhalb von UTC eine Näherung: Die anonyme Besucher-ID wechselt um Mitternacht UTC.',
     'Unknown time zone': 'Unbekannte Zeitzone',
-    'Direct / none': 'Direkt / keine', 'Android app': 'Android-App', 'iOS app': 'iOS-App', 'Web': 'Web',
+    'Direct / none': 'Direkt / keine', 'Android app': 'Android-App', 'iOS app': 'iOS-App', 'Web': 'Web', 'All apps': 'Alle Apps', 'All': 'Alle',
     'For scripts, agents and the CLI (': 'Für Skripte, Agents und die CLI (',
     '). A key acts as you, sees only your sites, and cannot touch the team or your security settings. Read-only unless you untick it.': '). Ein Key handelt als du, sieht nur deine Seiten und kann weder das Team noch deine Sicherheitseinstellungen ändern. Nur lesen, außer du nimmst den Haken raus.',
     '). A key acts as you, sees only your sites, and cannot touch the team or your security settings.': '). Ein Key handelt als du, sieht nur deine Seiten und kann weder das Team noch deine Sicherheitseinstellungen ändern.',

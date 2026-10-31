@@ -254,12 +254,45 @@
   $('liveModal').addEventListener('taci:close', function () { clearInterval(liveTimer); liveTimer = null; }); // every exit stops polling
   function fetchLive() {
     if (document.hidden) return;
-    api('/api/realtime?site=' + encodeURIComponent(state.site)).then(function (r) {
+    api('/api/realtime?' + liveQuery()).then(function (r) {
       if (r.error) return;
       $('live-online').textContent = r.online;
+      renderLivePlatforms(r.platforms || [], r.appOnline || 0);
       renderSpark(r.minutes);
       renderFeed(r.recent, r.now);
     }).catch(function () {});
+  }
+  // live = same segment filters as the dashboard (the period does not matter for the last minutes)
+  function liveQuery() {
+    var q = 'site=' + encodeURIComponent(state.site);
+    if (SHARE) q += '&share=' + SHARE;
+    Object.keys(state.filters).forEach(function (k) { if (k !== 'goal') q += '&' + k + '=' + encodeURIComponent(state.filters[k]); });
+    return q;
+  }
+  // who is online per platform; only shown once an app reports, each entry is a switch for the filter
+  function renderLivePlatforms(rows, appOnline) {
+    var el = $('live-pf');
+    var apps = rows.filter(function (r) { return r.name !== 'web'; });
+    var cur = state.filters.platform || '';
+    if (!apps.length && !cur) { el.classList.add('hide'); el.innerHTML = ''; return; }
+    el.classList.remove('hide');
+    var total = rows.reduce(function (a, r) { return a + r.visitors; }, 0);
+    var items = [{ v: '', icon: ico('i-users', 'ui'), label: 'All', n: total }];
+    if (apps.length > 1 || (apps.length && rows.some(function (r) { return r.name === 'web'; }))) items.push({ v: 'app', icon: platformIcon('app'), label: platformLabel('app'), n: appOnline });
+    rows.forEach(function (r) { items.push({ v: r.name, icon: platformIcon(r.name), label: platformLabel(r.name), n: r.visitors }); });
+    if (cur && !items.some(function (i) { return i.v === cur; })) items.push({ v: cur, icon: platformIcon(cur), label: platformLabel(cur), n: 0 });
+    el.innerHTML = items.map(function (i) {
+      return '<button type="button" class="lpf' + (i.v === cur ? ' active' : '') + '" data-pf="' + esc(i.v) + '" aria-pressed="' + (i.v === cur) + '">' + i.icon +
+        '<span>' + esc(i.label) + '</span><b>' + i.n + '</b></button>';
+    }).join('');
+    Array.prototype.forEach.call(el.querySelectorAll('[data-pf]'), function (b) {
+      b.onclick = function () {
+        var v = b.getAttribute('data-pf');
+        if (v) state.filters.platform = v; else delete state.filters.platform;
+        delete state.filters.version; // an app version only makes sense inside its platform
+        load(); fetchLive();
+      };
+    });
   }
   function renderSpark(minutes) {
     var svg = $('live-spark'), W = 600, H = 70, n = minutes.length;
@@ -601,8 +634,8 @@
     'ig': 'Instagram', 'l.instagram.com': 'Instagram', 'homescreen': 'Homescreen (app shortcut)',
     'android-app://com.google.android.googlequicksearchbox': 'Google App (Android)', 't.co': 'X / Twitter',
   };
-  var PLATFORM_NAMES = { web: 'Web', android: 'Android app', ios: 'iOS app', macos: 'macOS app', windows: 'Windows app', linux: 'Linux app' };
-  function platformIcon(n) { return n === 'web' ? ico('i-web', 'ui') : n === 'windows' ? ico('i-desktop', 'ui') : brand(own(PLATFORM_ICON, n), 'i-mobile'); }
+  var PLATFORM_NAMES = { web: 'Web', app: 'All apps', android: 'Android app', ios: 'iOS app', macos: 'macOS app', windows: 'Windows app', linux: 'Linux app' };
+  function platformIcon(n) { return n === 'web' ? ico('i-web', 'ui') : n === 'app' ? ico('i-smartphone', 'ui') : n === 'windows' ? ico('i-desktop', 'ui') : brand(own(PLATFORM_ICON, n), 'i-mobile'); }
   function platformLabel(n) { return own(PLATFORM_NAMES, n) || n; }
   state.pfTab = 'platforms';
   function renderPlatformsPanel() {
@@ -613,7 +646,13 @@
     if (!hasApp) { w.classList.add('hide'); return; }
     w.classList.remove('hide');
     if (state.pfTab === 'appVersions') bars('p-platforms', s.appVersions || [], { filterKey: 'version', icon: function () { return ico('i-layers', 'ui'); }, label: function (r) { return 'v' + r.name; } });
-    else bars('p-platforms', s.platforms || [], { filterKey: 'platform', icon: function (r) { return platformIcon(r.name); }, label: function (r) { return platformLabel(r.name); } });
+    else {
+      // "All apps" row on top once more than one kind of visitor reports (web + app, or several apps)
+      var pfRows = s.platforms || [];
+      var appRows = pfRows.filter(function (r) { return r.name !== 'web'; });
+      if (!state.filters.platform && s.appVisitors && pfRows.length > 1 && appRows.length) pfRows = [{ name: 'app', visitors: s.appVisitors }].concat(pfRows);
+      bars('p-platforms', pfRows, { filterKey: 'platform', icon: function (r) { return platformIcon(r.name); }, label: function (r) { return platformLabel(r.name); } });
+    }
   }
   function sourceLabel(n) { if (n === 'Direct') return 'Direct / none'; var nice = own(SOURCE_NAMES, n); return nice ? nice + ' · ' + n : n; }
   function renderSourcesPanel() {
