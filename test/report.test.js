@@ -196,6 +196,9 @@ test('weekly report', async (t) => {
     assert.strictEqual((await call('POST', '/api/me/report', { token: owner, body: { email: 'fabi@example.com', weekly: true, lang: 'xx' } })).status, 400);
     assert.strictEqual((await call('POST', '/api/me/report', { token: owner, body: { email: 'fabi@example.com', weekly: true, lang: 'de' } })).status, 200);
     assert.strictEqual((await call('GET', '/api/me/report', { token: owner })).j.lang, 'de');
+    // "send now" uses the real clock, the fixtures sit around 19 Oct 2026 → give the real last week
+    // some visitors too, otherwise the test turns red once that date is more than a week ago
+    events(a.id, Array.from({ length: 3 }, (_, i) => ({ ts: Date.now() - 2 * day, vh: 'now' + i, country: 'AT' })));
     mails.length = 0;
     assert.strictEqual((await call('POST', '/api/me/report/send', { token: owner })).status, 200);
     await sleep(200);
