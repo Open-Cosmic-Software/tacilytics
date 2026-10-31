@@ -83,6 +83,30 @@ test('app live', async (t) => {
     assert.strictEqual(web.appVisitors, null);
   });
 
+  await t.test('one spelling everywhere: upper case and ipados', async () => {
+    assert.strictEqual((await get('/api/v1/realtime?site=shop.test&platform=Android')).data.online, 2);
+    assert.strictEqual((await get('/api/v1/realtime?site=shop.test&platform=APP')).data.online, 3);
+    assert.strictEqual((await get('/api/v1/realtime?site=shop.test&platform=ipados')).data.online, 1);
+    assert.strictEqual((await get('/api/v1/stats?site=shop.test&period=today&platform=iPadOS')).data.realtime, 1);
+  });
+
+  await t.test('platform=app combines with the app version filter', async () => {
+    await collect(appUa, { p: '/home', pf: 'android', sid: 'sess-android-0003', av: '1.9.0' });
+    assert.strictEqual((await get('/api/v1/realtime?site=shop.test&platform=app&version=1.9.0')).data.online, 1);
+    assert.strictEqual((await get('/api/v1/realtime?site=shop.test&platform=app&version=2.0.0')).data.online, 3);
+  });
+
+  await t.test('appVisitors is only computed when it is shown', async () => {
+    assert.strictEqual((await get('/api/v1/stats?site=shop.test&period=today&platform=android')).data.appVisitors, null);
+    await fetch(base + '/api/sites', { method: 'POST', headers: { 'Content-Type': 'application/json', ...AUTH }, body: JSON.stringify({ domain: 'web.test' }) });
+    await fetch(base + '/api/collect', { method: 'POST', headers: { 'Content-Type': 'text/plain', 'User-Agent': ua(9) }, body: JSON.stringify({ d: 'web.test', p: '/' }) });
+    const w = (await get('/api/v1/stats?site=web.test&period=today')).data;
+    assert.strictEqual(w.appVisitors, null, 'web-only site: no app scan');
+    const r = (await get('/api/v1/realtime?site=web.test')).data;
+    assert.deepStrictEqual(r.platforms.map((x) => x.name), ['web']);
+    assert.strictEqual(r.appOnline, 0);
+  });
+
   await t.test('an unknown platform value matches nothing (bound parameter, no injection)', async () => {
     const r = await get("/api/v1/realtime?site=shop.test&platform=" + encodeURIComponent("x' OR 1=1 --"));
     assert.strictEqual(r.status, 200);

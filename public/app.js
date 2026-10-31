@@ -252,10 +252,12 @@
   function openLive() { if (!state.site || state.site === 'no sites yet') return; $('liveModal').classList.remove('hide'); fetchLive(); clearInterval(liveTimer); liveTimer = setInterval(fetchLive, 8000); }
   function closeLive() { closeModal($('liveModal')); }
   $('liveModal').addEventListener('taci:close', function () { clearInterval(liveTimer); liveTimer = null; }); // every exit stops polling
+  var liveSeq = 0; // a slower, older answer (e.g. before a platform click) must not overwrite a newer one
   function fetchLive() {
     if (document.hidden) return;
+    var seq = ++liveSeq;
     api('/api/realtime?' + liveQuery()).then(function (r) {
-      if (r.error) return;
+      if (seq !== liveSeq || r.error) return;
       $('live-online').textContent = r.online;
       renderLivePlatforms(r.platforms || [], r.appOnline || 0);
       renderSpark(r.minutes);
@@ -277,14 +279,18 @@
     if (!apps.length && !cur) { el.classList.add('hide'); el.innerHTML = ''; return; }
     el.classList.remove('hide');
     var total = rows.reduce(function (a, r) { return a + r.visitors; }, 0);
-    var items = [{ v: '', icon: ico('i-users', 'ui'), label: 'All', n: total }];
+    var items = [{ v: '', icon: ico('i-users', 'ui'), label: 'All platforms', n: total }];
     if (apps.length > 1 || (apps.length && rows.some(function (r) { return r.name === 'web'; }))) items.push({ v: 'app', icon: platformIcon('app'), label: platformLabel('app'), n: appOnline });
     rows.forEach(function (r) { items.push({ v: r.name, icon: platformIcon(r.name), label: platformLabel(r.name), n: r.visitors }); });
-    if (cur && !items.some(function (i) { return i.v === cur; })) items.push({ v: cur, icon: platformIcon(cur), label: platformLabel(cur), n: 0 });
-    el.innerHTML = items.map(function (i) {
-      return '<button type="button" class="lpf' + (i.v === cur ? ' active' : '') + '" data-pf="' + esc(i.v) + '" aria-pressed="' + (i.v === cur) + '">' + i.icon +
+    if (cur && !items.some(function (i) { return i.v === cur; })) items.push({ v: cur, icon: platformIcon(cur), label: platformLabel(cur), n: cur === 'app' ? appOnline : 0 });
+    var html = items.map(function (i) {
+      var on = i.v === cur;
+      return '<button type="button" class="lpf' + (on ? ' active' : '') + '" data-pf="' + esc(i.v) + '" aria-pressed="' + on + '">' + (on ? ico('i-check', 'ui') : i.icon) +
         '<span>' + esc(i.label) + '</span><b>' + i.n + '</b></button>';
     }).join('');
+    if (el.getAttribute('data-html') === html) return; // unchanged: keep the DOM (and keyboard focus) as it is
+    var focused = el.contains(document.activeElement) ? document.activeElement.getAttribute('data-pf') : null;
+    el.innerHTML = html; el.setAttribute('data-html', html);
     Array.prototype.forEach.call(el.querySelectorAll('[data-pf]'), function (b) {
       b.onclick = function () {
         var v = b.getAttribute('data-pf');
@@ -293,6 +299,7 @@
         load(); fetchLive();
       };
     });
+    if (focused != null) { var f = el.querySelector('[data-pf="' + focused + '"]'); if (f) f.focus(); }
   }
   function renderSpark(minutes) {
     var svg = $('live-spark'), W = 600, H = 70, n = minutes.length;

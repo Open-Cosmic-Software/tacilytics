@@ -585,7 +585,7 @@ app.get('/api/v1', (_req, res) => res.json({
     'GET /api/v1/sites': 'list tracked sites',
     'POST /api/v1/sites': 'add a site { domain }',
     'GET /api/v1/stats?site=&period=': 'aggregated stats (period: today|7d|30d|90d|12mo, or from=YYYY-MM-DD&to=YYYY-MM-DD)',
-    'GET /api/v1/realtime?site=': 'online count, last-30-min pulse + recent events, online per platform; takes the same segment filters as /stats (e.g. platform=app)',
+    'GET /api/v1/realtime?site=': 'online count, last-30-min pulse + recent events; takes the same segment filters as /stats (e.g. platform=app). platforms + appOnline (online per platform) are always unfiltered',
     'GET /api/v1/usage?month=YYYY-MM': 'page views per site in a calendar month (UTC), owner / server key only',
     'POST /api/v1/hit': 'server mode: report a page view from your web server { domain, path, ip, ua, referrer?, lang?, purpose?, name? } (server-mode key)',
   },
@@ -695,13 +695,22 @@ function rangeFor(query, tz) {
 // Whitelisted segmentation filters — click any breakdown row in the dashboard to drill in.
 // Every value is bound as a parameter; only these exact column names are ever interpolated.
 const FILTER_COLS = { country: 'country', source: 'source', page: 'path', browser: 'browser', os: 'os', device: 'device', lang: 'lang', medium: 'utm_medium', campaign: 'utm_campaign', platform: PLATFORM_SQL, version: 'app_version' };
+// one spelling for the platform filter everywhere (page views, events, live): lower case, and
+// ipados is stored as ios at ingest, so it has to be filtered as ios too
+function normPlatform(v) {
+  const pf = String(v == null ? '' : v).toLowerCase().trim();
+  return pf === 'ipados' ? 'ios' : pf;
+}
 function buildFilters(query) {
   const clauses = [], params = [];
   for (const key of Object.keys(FILTER_COLS)) {
-    const v = query[key];
+    let v = query[key];
     if (v == null || v === '') continue;
-    // platform=app (2.6): every native app together (Android + iOS + desktop apps), web excluded
-    if (key === 'platform' && String(v).toLowerCase() === 'app') { clauses.push('platform IS NOT NULL'); continue; }
+    if (key === 'platform') {
+      v = normPlatform(v);
+      // platform=app (2.6): every native app together (Android + iOS + desktop apps), web excluded
+      if (v === 'app') { clauses.push('platform IS NOT NULL'); continue; }
+    }
     clauses.push(`${FILTER_COLS[key]} = ?`); params.push(String(v).slice(0, 200));
   }
   const goal = query.goal != null && query.goal !== '' ? String(query.goal).slice(0, 80) : null;
@@ -711,7 +720,7 @@ function buildFilters(query) {
 // Validated values only (whitelist / strict pattern), so they can be inlined into event queries.
 function eventPlatformFilter(query) {
   let f = '';
-  const pf = String(query.platform || '').toLowerCase();
+  const pf = normPlatform(query.platform);
   if (pf === 'app') f += ' AND platform IS NOT NULL';
   else if (pf === 'web' || Object.prototype.hasOwnProperty.call(APP_PLATFORMS, pf)) f += ` AND ${PLATFORM_SQL} = '${pf}'`;
   const v = String(query.version || '');
@@ -954,6 +963,7 @@ function statsHandler(req, res) {
     `SELECT path AS name, COUNT(*) AS pageviews, ROUND(AVG(scroll)) AS avg, ROUND(100.0 * SUM(scroll >= 75) / COUNT(*)) AS deep FROM events WHERE ${where} AND scroll IS NOT NULL GROUP BY path HAVING COUNT(*) >= 5 ORDER BY pageviews DESC LIMIT 10`,
   ).all(...args).map((r) => ({ ...r, visitors: r.pageviews }));
 
+  const platforms = topBy(PLATFORM_SQL, 6);
   res.json({
     site: { domain: site.domain, name: site.name },
     period, timezone: tz, range: { from: fromDay, to: toDay },
@@ -983,9 +993,12 @@ function statsHandler(req, res) {
     browsers: topBy('browser', 6),
     os: topBy('os', 6),
     devices: topBy('device', 4),
-    platforms: topBy(PLATFORM_SQL, 6),
-    // all native apps together (one visitor on Android + iOS counts once); null when no app reports
-    appVisitors: db.prepare(`SELECT COUNT(DISTINCT vh) v FROM events WHERE ${where} AND platform IS NOT NULL`).get(...args).v || null,
+    platforms,
+    // all native apps together (one visitor on Android + iOS counts once). Only counted when it is
+    // shown: no platform filter set and at least one app in the period (null otherwise, no extra scan)
+    appVisitors: !req.query.platform && platforms.some((r) => r.name !== 'web')
+      ? db.prepare(`SELECT COUNT(DISTINCT vh) v FROM events WHERE ${where} AND platform IS NOT NULL`).get(...args).v || null
+      : null,
     appVersions: topBy('app_version', 6),
     languages: topBy('lang', 6),
     goals,

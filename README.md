@@ -280,6 +280,9 @@ Webhooks entered in the dashboard must be public `https://` addresses — no loc
 Click **“● online now”** for a realtime view: a 30-minute pulse and a live feed of
 who’s on the site right now — page, goal, country, browser/device and source —
 auto-refreshing every few seconds.
+Live follows the dashboard filters: filter by platform (Android, iOS, Web or **All apps**)
+and you see only app users live. Once an app reports, the live view shows who is online per
+platform and works as a switch.
 
 <div align="center"><img src="docs/live.png" width="560" alt="Live visitors" /></div>
 
@@ -298,7 +301,7 @@ curl -H "Authorization: Bearer $TACILYTICS_API_KEY" \
 | `GET /api/v1/sites` | list tracked sites |
 | `POST /api/v1/sites` | add a site `{ domain }` |
 | `GET /api/v1/stats?site=&period=` | aggregated stats — `today \| 7d \| 30d \| 90d \| 12mo`, or `from=YYYY-MM-DD&to=YYYY-MM-DD` |
-| `GET /api/v1/realtime?site=` | online count, 30-min pulse + recent events |
+| `GET /api/v1/realtime?site=` | online count, 30-min pulse + recent events; same segment filters as `/stats` (e.g. `platform=app` for all apps), plus online per platform |
 | `POST /api/v1/hit` | server mode: report a page view from your web server (server-mode key), see [Server mode](#server-mode-no-script-at-all) |
 
 Add any of `country, source, page, browser, os, device, lang, medium, campaign, goal` to `/stats` to segment, e.g. `…/stats?site=example.com&period=30d&country=DE&medium=email`.
